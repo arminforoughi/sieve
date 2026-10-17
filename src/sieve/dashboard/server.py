@@ -771,6 +771,11 @@ def create_app(db: str, replay_run: str | None = None) -> FastAPI:
             return {"arms": {}}
         return report(Path(REPLAY_DB), [0.127, 0.25, 0.5, 1.0])
 
+    @app.get("/api/findings")
+    def api_findings():  # leads vs referee and disorder, same-model table, literature (Compare page)
+        from sieve.dashboard.findings import findings
+        return findings(db)
+
     @app.get("/api/config")
     def config():
         runs = list_runs(db)

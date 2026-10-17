@@ -14,6 +14,21 @@
   table.t td .iqr { color: var(--ink-3); font-size: 11.5px; }
   table.t td.best { font-weight: 700; }
   .armname { font-weight: 500; white-space: nowrap; }
+  .fnd h3.fnd-h { font-size: 13px; font-weight: 600; margin: 14px 0 6px; color: var(--ink); }
+  .fnd .sub { font-weight: 400; color: var(--ink-3); font-size: 12px; margin-left: 6px; }
+  .fnd-sum { display: flex; flex-wrap: wrap; gap: 8px; margin: 2px 0 10px; }
+  .fnd-sum .callout { flex: 1 1 260px; margin: 0; }
+  .fnd .note { margin: 8px 0 0; }
+  .fnd .chip { white-space: nowrap; }
+  .fnd td.lbl2 { white-space: nowrap; font-weight: 600; }
+  .fnd td .role { display: block; font-weight: 400; color: var(--ink-3); font-size: 11.5px; }
+  .fnd tr.lead td { background: var(--accent-soft); }
+  .fnd-why { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--gap); margin-top: 14px; }
+  .fnd-why > div { border: 1px solid var(--border); border-radius: var(--r); padding: 10px 12px; }
+  .fnd-why h4 { margin: 0 0 6px; font-size: 13px; }
+  .fnd-why p, .fnd-why li { font-size: 13px; line-height: 1.5; color: var(--ink-2); margin: 0; }
+  .fnd-why ul { margin: 0; padding-left: 18px; } .fnd-why li { margin: 3px 0; }
+  @media (max-width: 900px) { .fnd-why { grid-template-columns: minmax(0, 1fr); } }
 </style>
 </head>
 <body>
@@ -25,6 +40,30 @@
     <p class="lead">Two kinds of evidence. The <b>full runs</b> screen the whole 12,020-structure pool once each on a 4 CPU-hour budget. The <b>arena</b> replays every arm over many seeds on 292 structures whose true tier-2 uptake is known, so the answer is a distribution, not one lucky run. Losses are shown as plainly as wins.</p>
   </div></div>
   <div class="verdicts" id="verdicts"><div class="card"><span class="spin"></span> Loading…</div></div>
+
+  <section class="card fnd" id="findings" aria-label="What we found">
+    <h2>What we found <span class="sub">the leads, re-measured by the referee and checked for broken crystal files</span></h2>
+    <div class="fnd-sum" id="fnd-sum"><span class="spin"></span> Loading…</div>
+    <div class="tbl-wrap"><table class="t" id="fnd-leads"></table></div>
+    <p class="note">Referee = an independent tier-2 GCMC re-measurement (no LLM). <b>Disordered</b> = the cleaned CIF keeps atoms closer than any real bond (one crystallographic site recorded twice); the model treats both as real atoms, which can inflate binding. A disordered lead must be re-measured on a resolved copy before it can be trusted.</p>
+  </section>
+
+  <section class="card fnd" aria-label="Against standard capture materials">
+    <h2>Against standard CO₂ capture materials</h2>
+    <h3 class="fnd-h">Same model, same protocol <span class="sub" id="fnd-model"></span></h3>
+    <div class="tbl-wrap"><table class="t" id="fnd-same"></table></div>
+    <h3 class="fnd-h">Published values, for orientation only <span class="sub">approximate, 298 K; not produced by this project; verify before citing</span></h3>
+    <div class="tbl-wrap"><table class="t" id="fnd-lit"></table></div>
+    <div class="fnd-why">
+      <div><h4>Why it looks promising</h4><p>In this model ZADREE holds about <b>7 mol/kg at flue-gas pressure</b> against ~1 for MEA and ~3 for 13X, separates CO₂ from N₂ 5× better than HKUST-1, and binds at ~42 kJ/mol: strong enough to hold CO₂, about half an amine's chemical bond, so cheaper to regenerate. It does this <b>with no electrostatics at all</b>, 16× the typical pool structure at 0.15 bar.</p></div>
+      <div><h4>Why it isn't a result yet</h4><ul>
+        <li><b>Model ≠ lab.</b> Without framework charges, Mg-MOF-74 comes out at 1.7 here against ~8 measured. Only the same-model table is a fair comparison.</li>
+        <li><b>Broken crystal file.</b> All 32 of ZADREE's N atoms sit 0.45 Å from an O atom, exactly at the Cu pockets where CO₂ binds. 4 of the 5 top leads are disordered.</li>
+        <li><b>Pore blocking</b> is still being added, and the frameworks are rigid with <b>no water</b>, which is what kills most MOFs and 13X in practice.</li>
+        <li>ZADREE is a <b>published compound</b> (CSD refcode): its paper may already report CO₂ data.</li></ul></div>
+      <div><h4>Why it matters anyway</h4><p>MEA's regeneration can take a quarter to a third of a power plant's output, and 13X needs dry gas. Solid sorbents could beat both, but the bottleneck is <b>search</b>: 12,000+ known MOFs, weeks per lab test, ~220 CPU-h to simulate them all even cheaply. SIEVE turns 4 CPU-h into a <b>verified shortlist for chemists</b>, with every claim re-measured, peer-reviewed and checked for artefacts. That is the contribution. A material is a discovery only once a lab measures it.</p></div>
+    </div>
+  </section>
 
   <section class="card">
     <h2>Full runs on the 12,020-structure pool <span class="sub">one run per arm · as measured by each arm itself</span></h2>
@@ -46,6 +85,7 @@
     </section>
   </div>
 </main>
+<script src="/static/compare-findings.js"></script>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
