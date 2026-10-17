@@ -194,6 +194,8 @@ const workers = {
   slots: {}, latest: {},  // slot -> {el, job, shown: {task, kind}, holdUntil, lastKilled}
   render(f) {
     const box = $("slots");
+    if (f.verdict) { renderVerdict(f); this.slots = {}; return; }
+    $("w-title").textContent = "Worker pool";
     const ws = f.workers || [];
     $("w-note").textContent = ws.length ? `· ${ws.length} slot${ws.length === 1 ? "" : "s"}, one per core` : "";
     if (!ws.length) { box.innerHTML = `<div class="empty">${f.run ? "No workers yet." : "Select a run."}</div>`; this.slots = {}; return; }
@@ -276,6 +278,35 @@ const workers = {
     }
   },
 };
+
+// ------------------------------------------------------------------------------------ verdict
+// At run end the worker strip becomes the verdict: what each arm would name as its winner, what
+// it claimed, and what that structure really is once measured independently.
+const ARM_LABEL = Object.fromEntries(ARMS.map((a) => [a.key, a.label]));
+function renderVerdict(f) {
+  const v = f.verdict, box = $("slots");
+  $("w-title").textContent = "Verdict";
+  $("w-note").textContent = v.source ? `· true values: ${v.source}` : "· no independent re-measurement yet";
+  const rows = v.rows.map((r) => {
+    const rank = r.true_rank, inflated = r.claimed != null && r.true != null ? r.claimed - r.true : null;
+    const call = rank == null ? "not re-measured" : rank === 1 ? "true best" : rank <= 3 ? `true top 3 (#${rank})` : rank <= 10 ? `true top 10 (#${rank})` : `#${rank}`;
+    const cls = rank === 1 ? "good" : rank != null && rank <= 3 ? "ok" : "";
+    const sd = v.seeds && v.seeds[r.arm];
+    return `<tr class="${r.arm === f.run.arm ? "me" : ""}">
+      <td class="arm">${ARM_LABEL[r.arm] || r.arm}</td>
+      <td class="mono">${name(r.structure)}</td>
+      <td class="mono num">${f3(r.claimed)} <span class="dim">T${r.tier ?? "?"}</span></td>
+      <td class="mono num">${r.true == null ? "–" : f3(r.true)}</td>
+      <td class="mono num ${inflated > 0.05 ? "bad" : ""}">${inflated == null ? "" : (inflated >= 0 ? "+" : "") + inflated.toFixed(2)}</td>
+      <td class="call ${cls}">${call}</td>
+      <td class="mono num dim">${sd ? `${Math.round(100 * sd.winner_top10)}% · ${Math.round(100 * sd.reliability_found)}%` : ""}</td></tr>`;
+  }).join("");
+  box.innerHTML = `<table class="verdict">
+    <thead><tr><th>arm</th><th>recommended winner</th><th class="num">arm said</th><th class="num">true</th><th class="num">over-claim</th><th>verdict</th>
+    <th class="num">${v.seeds ? "20 seeds: winner in top 10 · found best" : ""}</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+    ${v.best ? `<div class="verdict-foot">True best among ${v.n_truth} measured: <span class="mono">${name(v.best.structure)} ${f3(v.best.value)} mol/kg</span></div>` : ""}`;
+}
 
 // -------------------------------------------------------------------------------- 3D structure
 // 3Dmol.js renders the actual framework from the same P1 CIF the simulation used: ball-and-stick,

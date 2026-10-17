@@ -243,12 +243,70 @@ def frame(db: str, run_id: str | None, T: float) -> dict:
         if row:
             curves[arm] = {"run_id": row[0], "points": curve(con, row[0], T)}
     out["curves"] = curves
-    out["reference"] = None  # held-out best: revealed only when a referee/labels result exists
-    if t_end and _has(con, "reference"):
+    out["verdict"] = verdict(con, run_id, T) if t_end else None
+    out["reference"] = ({"value": out["verdict"]["best"]["value"], "source": out["verdict"]["source"]}
+                        if out["verdict"] and out["verdict"]["best"] else None)
+    if t_end and not out["reference"] and _has(con, "reference"):
         ref = con.execute("SELECT value, source FROM reference ORDER BY rowid DESC LIMIT 1"
                           ).fetchone()
         out["reference"] = dict(ref) if ref else None
     return out
+
+
+def _truth_for(con: sqlite3.Connection, run_id: str) -> tuple[dict, str] | tuple[None, None]:
+    """True values for scoring a finished run: arena ground truth for arena runs, else the referee."""
+    import json as _j
+
+    cfg = _j.loads(con.execute("SELECT config_json FROM runs WHERE run_id=?", (run_id,)).fetchone()[0])
+    if cfg.get("candidates") or cfg.get("replay"):
+        from sieve.arena import ARENA_DB
+        if ARENA_DB.exists():
+            a = sqlite3.connect(f"file:{ARENA_DB}?mode=ro", uri=True)
+            if _has(a, "truth"):
+                return ({r[0]: r[1] for r in a.execute("SELECT structure, uptake FROM truth")},
+                        "arena ground truth (tier-2 GCMC on all 292)")
+    if _has(con, "referee"):
+        vals = {r[0]: r[1] for r in con.execute("SELECT structure, uptake FROM referee")}
+        if vals:
+            return vals, f"independent tier-2 re-measurement of every arm's top 10 ({len(vals)} structures)"
+    return None, None
+
+
+def verdict(con: sqlite3.Connection, run_id: str, T: float) -> dict | None:
+    """Per arm: the structure it would name as winner, what it claimed, and what it really is."""
+    from sieve.store import estimates_from_evaluations
+
+    truth, source = _truth_for(con, run_id)
+    ranked = sorted(truth, key=truth.get, reverse=True) if truth else []
+    rows = []
+    for arm in ARMS:
+        r = con.execute("SELECT run_id FROM runs WHERE arm=? AND status='finished' AND finished_at<=? "
+                        "ORDER BY (run_id=?) DESC, created_at DESC LIMIT 1", (arm, T, run_id)).fetchone()
+        if not r:
+            continue
+        rec = con.execute("SELECT payload_json FROM events WHERE run_id=? AND type='recommend' "
+                          "ORDER BY event_id DESC LIMIT 1", (r[0],)).fetchone()
+        est = estimates_from_evaluations(con, r[0])
+        if rec:
+            pick = json.loads(rec[0]).get("structure")
+        else:
+            pick = max(est, key=lambda s: est[s].uptake) if est else None
+        if not pick:
+            continue
+        e = est.get(pick)
+        rows.append({"arm": arm, "run_id": r[0], "structure": pick,
+                     "claimed": e.uptake if e else None, "claimed_err": e.err if e else None,
+                     "tier": e.tier if e else None,
+                     "true": truth.get(pick) if truth else None,
+                     "true_rank": ranked.index(pick) + 1 if truth and pick in truth else None})
+    seeds = None
+    rep = Path(__file__).resolve().parents[3] / "data" / "arena-report.json"
+    if rep.exists() and source and source.startswith("arena"):
+        d = json.loads(rep.read_text())
+        seeds = {arm: a["budgets"].get("1") for arm, a in d["arms"].items()}
+    return {"source": source, "n_truth": len(ranked),
+            "best": {"structure": ranked[0], "value": truth[ranked[0]]} if ranked else None,
+            "rows": rows, "seeds": seeds}
 
 
 ROLE_ORDER = {"orchestrator": 0, "scout": 1, "allocator": 2, "critic": 3}
