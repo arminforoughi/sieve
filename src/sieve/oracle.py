@@ -157,6 +157,14 @@ class Descriptors:
     core: dict = field(default_factory=dict)  # CoRE MOF 2019 Zeo++ descriptors, when listed
     error: str | None = None
 
+    @classmethod
+    def from_dict(cls, d: dict) -> "Descriptors":
+        known = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
+        for k in ("unit_cells", "perp_widths"):
+            if k in known:
+                known[k] = tuple(known[k])
+        return cls(**known)
+
 
 @dataclass
 class Plan:
@@ -497,6 +505,11 @@ class Oracle:
                          grid_mc_k=med(m, prior.grid_mc_k), uptake_prior=med(u, prior.uptake_prior),
                          n_fits=len(d) + len(g) + len(m))
 
+    def framework_name(self, desc: Descriptors) -> str:
+        """RASPA framework name, which keys the grid cache: scoped to this run, so one arm never
+        gets a grid another arm paid for (resume keeps the run_id, so it keeps its grids)."""
+        return f"{desc.alias}.{hashlib.sha1(self.run_id.encode()).hexdigest()[:8]}"
+
     @staticmethod
     def grid_points(desc: Descriptors) -> float:
         return desc.volume / GRID_SPACING_A ** 3
@@ -514,7 +527,7 @@ class Oracle:
         moves = m.moves(desc, tier, uptake_hint if uptake_hint is not None
                         else self.known_uptake(desc.structure))
         direct = m.direct_a + m.direct_k * moves * desc.n_atoms_sim
-        cached = self.env.has_grid(desc.alias)
+        cached = self.env.has_grid(self.framework_name(desc))
         build = 0.0 if cached else (m.grid_g * self.grid_points(desc) * desc.n_atoms_sim
                                     * len(forcefield.GRID_TYPES))
         grid = build + m.grid_mc_a + m.grid_mc_k * moves
@@ -617,11 +630,15 @@ class Oracle:
         plan = self.plan(desc, tier, mode, model, uptake_hint)
         if timeout_s is None:
             timeout_s = min(t.max_timeout_s, max(30.0, TIMEOUT_FACTOR * plan.est_cpu_s))
+        # never let one job spend more than what is left (concurrent jobs can still overrun
+        # their estimates, so a run can end slightly over budget; the ledger reports it exactly)
+        timeout_s = max(1.0, min(timeout_s, self.remaining()))
         eval_id = self._reserve(desc.structure, tier, plan.mode, plan.est_cpu_s, timeout_s,
                                 worker_id)
         t0 = time.time()
         base = {
-            "alias": desc.alias, "cif_path": desc.prepared_path, "elements": desc.elements,
+            "alias": self.framework_name(desc), "cif_path": desc.prepared_path,
+            "elements": desc.elements,
             "unit_cells": list(desc.unit_cells), "forcefield": forcefield.NAME,
             "grid_types": list(forcefield.GRID_TYPES), "spacing": GRID_SPACING_A,
             "molecule": "CO2", "temperature": 298.0, "pressure": 100000.0,
@@ -633,14 +650,15 @@ class Oracle:
         phases: list[dict] = []
         used = lambda: sum(p["cpu_s"] for p in phases)  # noqa: E731
         if plan.mode == "grid":
-            self.env.touch_grid(desc.alias)
+            self.env.touch_grid(self.framework_name(desc))
             if plan.build_grid:
                 private = self.env.private_root()
                 try:
                     p = self._run_child({**base, "kind": "makegrid", "raspa_root": str(private)},
                                         timeout_s, eval_id, 0.0)
                     if p["status"] == "ok" and not (p["result"].get("grid_ok")
-                                                    and self.env.publish(private, desc.alias)):
+                                                    and self.env.publish(private,
+                                                                        self.framework_name(desc))):
                         p["status"], p["stderr"] = "error", "grid build did not complete"
                 finally:
                     shutil.rmtree(private, ignore_errors=True)

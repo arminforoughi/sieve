@@ -214,6 +214,35 @@ class Store:
         self.con.execute("UPDATE tasks SET status=?, eval_id=?, updated_at=? WHERE task_id=?",
                          (status, eval_id, time.time(), task_id))
 
+    def reclaim_worker(self, run_id: str, worker_id: str | None = None) -> dict:
+        """Repair work left in flight by a dead worker (or by every worker, if worker_id is None).
+
+        Its 'running' evaluations become 'lost', charged the child CPU their last heartbeat
+        recorded; its 'running' tasks go back to 'queued'.
+        """
+        w_sql, w_arg = ("AND worker_id=?", (worker_id,)) if worker_id else ("", ())
+        out = {"lost_evaluations": 0, "lost_cpu_s": 0.0, "requeued_tasks": 0}
+        self.con.execute("BEGIN IMMEDIATE")
+        try:
+            for r in self.con.execute(f"SELECT eval_id, heartbeat_cpu_s FROM evaluations WHERE "
+                                      f"run_id=? AND status='running' {w_sql}",
+                                      (run_id, *w_arg)).fetchall():
+                cpu = max(0.0, r["heartbeat_cpu_s"] or 0.0)
+                self.con.execute("UPDATE evaluations SET status='lost', cpu_s=?, finished_at=? "
+                                 "WHERE eval_id=?", (cpu, time.time(), r["eval_id"]))
+                out["lost_evaluations"] += 1
+                out["lost_cpu_s"] += cpu
+            cur = self.con.execute(f"UPDATE tasks SET status='queued', worker_id=NULL, updated_at=? "
+                                   f"WHERE run_id=? AND status='running' {w_sql}",
+                                   (time.time(), run_id, *w_arg))
+            out["requeued_tasks"] = cur.rowcount
+            self.con.execute("COMMIT")
+        except BaseException:
+            self.con.execute("ROLLBACK")
+            raise
+        out["lost_cpu_s"] = round(out["lost_cpu_s"], 2)
+        return out
+
     def tasks(self, run_id: str, status: str | None = None) -> list[sqlite3.Row]:
         q, args = "SELECT * FROM tasks WHERE run_id=?", [run_id]
         if status:
@@ -283,29 +312,14 @@ def resume(db_path: str | Path, run_id: str, reconcile: bool = True) -> RunState
     st = Store(db_path)
     con = st.con
     run = st.run(run_id)
-    fixed = {"lost_evaluations": 0, "lost_cpu_s": 0.0, "requeued_tasks": 0, "open_round": None}
+    fixed: dict = {"lost_evaluations": 0, "lost_cpu_s": 0.0, "requeued_tasks": 0,
+                   "open_round": None}
     if reconcile:
-        con.execute("BEGIN IMMEDIATE")
-        try:
-            for r in con.execute("SELECT eval_id, heartbeat_cpu_s FROM evaluations "
-                                 "WHERE run_id=? AND status='running'", (run_id,)).fetchall():
-                cpu = max(0.0, r["heartbeat_cpu_s"] or 0.0)
-                con.execute("UPDATE evaluations SET status='lost', cpu_s=?, finished_at=? "
-                            "WHERE eval_id=?", (cpu, time.time(), r["eval_id"]))
-                fixed["lost_evaluations"] += 1
-                fixed["lost_cpu_s"] += cpu
-            cur = con.execute("UPDATE tasks SET status='queued', worker_id=NULL, updated_at=? "
-                              "WHERE run_id=? AND status='running'", (time.time(), run_id))
-            fixed["requeued_tasks"] = cur.rowcount
-            open_round = con.execute("SELECT MIN(round_no) FROM rounds WHERE run_id=? AND "
-                                     "finished_at IS NULL", (run_id,)).fetchone()[0]
-            fixed["open_round"] = open_round
-            con.execute("UPDATE runs SET status='running', updated_at=? WHERE run_id=?",
-                        (time.time(), run_id))
-            con.execute("COMMIT")
-        except BaseException:
-            con.execute("ROLLBACK")
-            raise
+        fixed.update(st.reclaim_worker(run_id))
+        fixed["open_round"] = con.execute("SELECT MIN(round_no) FROM rounds WHERE run_id=? AND "
+                                          "finished_at IS NULL", (run_id,)).fetchone()[0]
+        con.execute("UPDATE runs SET status='running', updated_at=? WHERE run_id=?",
+                    (time.time(), run_id))
         st.event(run_id, "run_resume", fixed)
 
     last = con.execute("SELECT MAX(round_no) FROM rounds WHERE run_id=? AND finished_at IS NOT NULL",
