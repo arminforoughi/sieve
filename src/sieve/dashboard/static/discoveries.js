@@ -23,6 +23,7 @@ const COLS = [
   { k: "density", t: "ρ g/cm³", n: true },
   { k: "metals", t: "metals" },
   { k: "oms", t: "OMS" },
+  { k: "S", t: "CO₂/N₂ S", n: true, props: true },
   { k: "run", t: "run", all: true },
 ];
 
@@ -79,13 +80,17 @@ async function loadBoard() {
 function visibleRows() {
   const q = $("filter").value.trim().toLowerCase(), t2 = $("only-t2").checked;
   const { k, dir } = S.sort;
-  const val = (r) => (k === "metals" ? (r.metals || []).join(" ") : k === "oms" ? (r.oms ? 1 : 0) : r[k]);
+  const val = (r) => (k === "metals" ? (r.metals || []).join(" ") : k === "oms" ? (r.oms ? 1 : 0) : k === "S" ? selOf(r) : r[k]);
   return S.rows.filter((r) => (!t2 || r.tier === 2) && (!q || r.structure.toLowerCase().includes(q) || (r.metals || []).join(" ").toLowerCase().includes(q)))
     .sort((a, b) => { const x = val(a), y = val(b); if (x == null) return 1; if (y == null) return -1; return (x > y ? 1 : x < y ? -1 : 0) * dir; });
 }
 
+// CO2/N2 selectivity from the science page's capture-props step (15:85 flue gas, 1 bar, 298 K)
+const selOf = (r) => (r.props && r.props.S ? r.props.S.v : null);
+
 function renderBoard() {
-  const cols = COLS.filter((c) => !c.all || S.scope === "all");
+  const anyProps = S.rows.some((r) => selOf(r) != null);  // the column exists only where props were computed
+  const cols = COLS.filter((c) => (!c.all || S.scope === "all") && (!c.props || anyProps));
   const rows = visibleRows();
   const head = `<thead><tr>${cols.map((c) => `<th class="${c.n ? "n" : ""} ${c.nosort ? "" : "sort"}" data-k="${c.k}" ${S.sort.k === c.k ? `aria-sort="${S.sort.dir > 0 ? "ascending" : "descending"}"` : ""}>${c.t}</th>`).join("")}</tr></thead>`;
   const body = rows.length ? rows.map((r, i) => `<tr class="click" data-s="${esc(r.structure)}">
@@ -96,6 +101,7 @@ function renderBoard() {
       <td class="n">${fx(r.t1)}</td><td class="n">${fx(r.t2)}</td>
       <td class="n">${fx(r.PLD)}</td><td class="n">${fx(r.LCD)}</td><td class="n">${fx(r.VF)}</td><td class="n">${fx(r.density)}</td>
       <td class="metal">${esc((r.metals || []).join(" ") || "–")}</td><td>${r.oms ? "yes" : r.oms === false ? "no" : "–"}</td>
+      ${anyProps ? `<td class="n" title="${selOf(r) != null ? `CO₂/N₂ selectivity, 15:85 at 1 bar, 298 K; ± ${fx(r.props.S.e, 1)}` : "capture properties not computed for this structure"}">${selOf(r) != null ? `${fx(selOf(r), 1)} <span class="pm">± ${fx(r.props.S.e, 1)}</span>` : "–"}</td>` : ""}
       ${S.scope === "all" ? `<td class="metal">${esc(r.run)}</td>` : ""}</tr>`).join("")
     : `<tr><td colspan="${cols.length}" class="note">${S.rows.length ? "No rows match the filter." : "This run has not measured any structure by GCMC yet (tier 0 descriptors only)."}</td></tr>`;
   $("lb").innerHTML = head + `<tbody>${body}</tbody>`;
@@ -105,8 +111,8 @@ function renderBoard() {
   }));
   $("lb").querySelector("tbody").onclick = (e) => { if (e.target.closest("a")) return; const tr = e.target.closest("tr[data-s]"); if (tr) location.href = sciURL(tr.dataset.s); };
   const cs = cols.filter((c) => c.k !== "rank");
-  const csv = [["rank", ...cs.map((c) => c.k === "uptake" ? "uptake_molkg,err_molkg" : c.k)].join(",")]
-    .concat(rows.map((r, i) => [i + 1, ...cs.map((c) => c.k === "uptake" ? `${r.uptake},${r.err}` : c.k === "metals" ? (r.metals || []).join(" ") : r[c.k] ?? "")].join(",")));
+  const csv = [["rank", ...cs.map((c) => c.k === "uptake" ? "uptake_molkg,err_molkg" : c.k === "S" ? "selectivity_co2_n2,selectivity_err" : c.k)].join(",")]
+    .concat(rows.map((r, i) => [i + 1, ...cs.map((c) => c.k === "uptake" ? `${r.uptake},${r.err}` : c.k === "S" ? (selOf(r) != null ? `${r.props.S.v},${r.props.S.e}` : ",") : c.k === "metals" ? (r.metals || []).join(" ") : r[c.k] ?? "")].join(",")));
   const a = $("csv");
   if (a.dataset.url) URL.revokeObjectURL(a.dataset.url);
   a.dataset.url = a.href = URL.createObjectURL(new Blob([csv.join("\n") + "\n"], { type: "text/csv" }));

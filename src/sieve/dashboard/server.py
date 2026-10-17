@@ -499,6 +499,21 @@ def _science_ready(name: str) -> bool:
     return (PROJECT_ROOT / "data" / "science" / f"{raspa_alias(name)}.json").exists()
 
 
+def _props_brief(name: str) -> dict | None:
+    """Headline capture properties (selectivity, VSA working capacity, Qst) if computed, else None."""
+    from sieve.oracle import PROJECT_ROOT, raspa_alias
+    f = PROJECT_ROOT / "data" / "science" / f"{raspa_alias(name)}.props.json"
+    if not f.exists():
+        return None
+    try:
+        p = json.loads(f.read_text())
+    except ValueError:
+        return None
+    pick = lambda d: None if not d or d.get("value") is None else {"v": round(d["value"], 4), "e": round(d["err"], 4)}  # noqa: E731
+    return {"S": pick(p.get("selectivity")), "wc_vsa": pick((p.get("wc") or {}).get("vsa")),
+            "qst": pick((p.get("qst") or {}).get("widom"))}
+
+
 def search(q: str, limit: int = 30) -> list[dict]:
     """Pool structures whose name contains q (prefix matches first)."""
     idx = pool_index()
@@ -540,7 +555,7 @@ def leaderboard(db: str, run_id: str) -> dict:
         d = idx.get(s, {})
         rows.append({**r, "PLD": d.get("PLD"), "LCD": d.get("LCD"), "VF": d.get("VF"),
                      "density": d.get("density"), "metals": d.get("metals", []), "oms": d.get("oms"),
-                     "science": _science_ready(s)})
+                     "science": _science_ready(s), "props": _props_brief(s)})
     rows.sort(key=lambda r: r["uptake"], reverse=True)
     return {"run": dict(runs[run_id]) if run_id in runs else None, "rows": rows}
 
@@ -699,6 +714,15 @@ def create_app(db: str, replay_run: str | None = None) -> FastAPI:
         if kind == "json":
             return Response(json.dumps(d, indent=1), media_type="application/json",
                             headers=att(f"{stem}-science.json"))
+        if kind in ("props.csv", "props.json"):
+            pr = d.get("props")
+            if not pr:
+                return Response("capture properties not computed yet", status_code=404)
+            if kind == "props.csv":
+                return PlainTextResponse(science.props_csv(pr), media_type="text/csv",
+                                         headers=att(f"{stem}-capture-props.csv"))
+            return Response(json.dumps(pr, indent=1), media_type="application/json",
+                            headers=att(f"{stem}-capture-props.json"))
         return Response("unknown download", status_code=404)
 
     @app.get("/api/discoveries")
@@ -778,7 +802,7 @@ def create_app(db: str, replay_run: str | None = None) -> FastAPI:
             items.append({"name": typical.read_text().strip(), "role": "a typical pool structure (median)"})
         seen = {i["name"] for i in items}
         if science.SCI_DIR.exists():  # anything a scientist asked for earlier, newest first
-            extra = sorted((f for f in science.SCI_DIR.glob("*.json") if not f.name.startswith("review-")),
+            extra = sorted((f for f in science.SCI_DIR.glob("*.json") if not f.name.startswith("review-") and not f.name.endswith(".props.json")),
                            key=lambda f: f.stat().st_mtime, reverse=True)
             for f in extra:
                 try:

@@ -1,0 +1,46 @@
+# Excerpts of RASPA 2.0.4 output (SieveUFFMix, ZADREE_clean, 20-cycle smoke runs; values not converged).
+# --- 15:85 CO2:N2 mixture, 1 bar, 298 K
+Enthalpy of adsorption:
+=======================
+
+	Enthalpy of adsorption component 0 [CO2]
+	-------------------------------------------------------------
+		Block[ 0] -3988.20754        [-]
+		Block[ 1] -4224.50370        [-]
+		Block[ 2] -4914.52490        [-]
+		Block[ 3] -4555.67010        [-]
+		Block[ 4] -3759.32713        [-]
+		------------------------------------------------------------------------------
+		Average          -4288.44668 +/-         568.091306 [K]
+		                   -35.65614 +/-           4.723375 [KJ/MOL]
+		Note: Ug should be subtracted to this value
+		Note: The heat of adsorption Q=-H
+
+	Enthalpy of adsorption component 1 [N2]
+	-------------------------------------------------------------
+		Block[ 0] -3330.77763        [-]
+		Block[ 1] -2656.61552        [-]
+		Block[ 2] -3728.98017        [-]
+		Block[ 3] -1430.50783        [-]
+		Block[ 4] -1817.51608        [-]
+		------------------------------------------------------------------------------
+		Average          -2592.87945 +/-        1208.688541 [K]
+		                   -21.55841 +/-          10.049598 [KJ/MOL]
+		Note: Ug should be subtracted to this value
+		Note: The heat of adsorption Q=-H
+
+	Total enthalpy of adsorption from components and measured mol-fraction
+	----------------------------------------------------------------------
+		Block[ 0] -3861.98099        [-]
+		Block[ 1] -4005.59101        [-]
+		Block[ 2] -4786.41287        [-]
+		Block[ 3] -4254.69139        [-]
+		Block[ 4] -3571.71254        [-]
+		------------------------------------------------------------------------------
+		Average          -4096.07776 +/-         568.798564 [K]
+		                   -34.05669 +/-           4.729256 [KJ/MOL]
+		Note: Ug should be subtracted to this value
+		Note: The heat of adsorption Q=-H
+
+
+derivative of the chemical potential with respect to density (constant T,V):

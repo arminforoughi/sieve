@@ -1,0 +1,19 @@
+# --- pure CO2, 0.01 bar, 298 K
+Enthalpy of adsorption:
+=======================
+
+	Total enthalpy of adsorption
+	----------------------------
+	Block[ 0] -4133.20233        [K]
+	Block[ 1] -5292.02323        [K]
+	Block[ 2] -2648.99326        [K]
+	Block[ 3] -3078.20754        [K]
+	Block[ 4] -4201.01100        [K]
+	------------------------------------------------------------------------------
+	Average          -3870.68747 +/-        1289.986652 [K]
+	                   -32.18270 +/-          10.725549 [KJ/MOL]
+	Note: Ug should be subtracted from this value
+	Note: The heat of adsorption Q=-H
+
+
+derivative of the chemical potential with respect to density (constant T,V):

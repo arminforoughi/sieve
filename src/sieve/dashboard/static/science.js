@@ -151,12 +151,22 @@ function kpis() {
     + kpi("Deepest well", k.min_kjmol != null ? `${fx(k.min_kjmol, 1)}` : wait, `kJ/mol · median ${fx(k.median_kjmol, 1)}`)
     + kpi("PLD / LCD", p.PLD != null ? `${fx(p.PLD, 1)} <small>/</small> ${fx(p.LCD, 1)}` : "–", "Å · pore-limiting / largest cavity")
     + kpi("Void fraction · density", p.VF != null ? `${fx(p.VF)} <small>·</small> ${fx(p.density)}` : "–", "· g/cm³ (tier-0 descriptors)");
+  // capture performance: only once the props step has run for this structure
+  const pr = d.props, none = ready ? `<span class="dim" title="python -m sieve.science --props ${esc(S.sel)}">–</span>` : wait;
+  const pm = (o, k) => (o && o.value != null ? `${fx(o.value, k)} <small>± ${fx(o.err, k)}</small>` : null);
+  const sel = pr && pr.selectivity, vsa = pr && pr.wc && pr.wc.vsa, q = pr && pr.qst && pr.qst.widom;
+  $("kpis").innerHTML +=
+    kpi("CO₂/N₂ selectivity", pm(sel, sel && sel.value >= 100 ? 0 : 1) || none, pr ? "15:85 flue gas · 1 bar · 298 K" : "capture props not computed", !!sel)
+    + kpi("Working capacity · VSA", pm(vsa, 2) || none, "mol/kg · 0.15 → 0.01 bar, 298 K", !!vsa)
+    + kpi("Q<sub>st</sub> CO₂", pm(q, 1) || none, q ? `kJ/mol · Widom, ∞ dilution · well ${fx(k.min_kjmol, 1)}` : "kJ/mol · Widom, infinite dilution", !!q);
 }
 
 function exports() {
   const ready = (S.data[S.sel] || {}).status === "ready", q = encodeURIComponent(S.sel);
-  for (const [id, kind] of [["dl-csv", "isotherm.csv"], ["dl-cube", "cube"], ["dl-json", "json"]]) {
+  const hasProps = ready && !!(S.data[S.sel] || {}).props;
+  for (const [id, kind] of [["dl-csv", "isotherm.csv"], ["dl-cube", "cube"], ["dl-json", "json"], ["dl-pcsv", "props.csv"], ["dl-pjson", "props.json"]]) {
     const a = $(id);
+    if (kind.startsWith("props")) a.hidden = !hasProps;
     if (ready) { a.href = `/api/download/${kind}?name=${q}`; a.removeAttribute("aria-disabled"); a.title = ""; }
     else { a.removeAttribute("href"); a.setAttribute("aria-disabled", "true"); a.title = "available once computed"; }
   }
@@ -373,7 +383,9 @@ function histChart() {
 function table() {
   const cols = compared();
   const cell = (n, f) => { try { const v = f(n); return v == null || v === "" ? "–" : v; } catch (_) { return "–"; } };
-  const D = (n) => S.data[n] || {}, P = (n) => (S.meas[n] || {}).pool || {};
+  const D = (n) => S.data[n] || {}, P = (n) => (S.meas[n] || {}).pool || {}, PR = (n) => D(n).props || {};
+  const sig = (x) => (Math.abs(x) >= 100 ? x.toFixed(0) : Math.abs(x) >= 10 ? x.toFixed(1) : x.toPrecision(2));
+  const pmv = (o, k, auto) => (o && o.value != null ? `${auto ? sig(o.value) : fx(o.value, k)} <span class="pm">± ${auto ? sig(o.err) : fx(o.err, k)}</span>` : null);
   const upt = (pb) => (n) => { const q = at(D(n), pb); return q.uptake == null ? null : `${fx(q.uptake)} <span class="pm">± ${fx(q.err)}</span>`; };
   const rows = [
     ["sec", "GCMC uptake, this model (mol/kg, 298 K)"],
@@ -381,6 +393,16 @@ function table() {
     ["0.15 → 1 bar swing", (n) => { const a = at(D(n), 0.15).uptake, b = at(D(n), 1).uptake; return a == null || b == null ? null : fx(b - a); }],
     ["Screening runs, 1 bar", (n) => { const b = bestMeas(n); return b ? `${tierTag(b.tier)} ${fx(b.uptake)} <span class="pm">± ${fx(b.err)}</span>` : null; }],
     ["lit", "Experiment, ~1 bar (literature)", (n) => (LIT[n] ? `<span title="${esc(LIT[n][1])}">${LIT[n][0]}</span>` : null)],
+    ["sec", "Capture performance · 15:85 CO₂:N₂ flue gas, 298 K"],
+    ["CO₂/N₂ selectivity <small>1 bar mixture</small>", (n) => pmv(PR(n).selectivity, 1)],
+    ["Infinite-dilution S₀ <small>K<sub>H</sub> ratio</small>", (n) => pmv(PR(n).selectivity_0, 0)],
+    ["CO₂ from mixture <small>mol/kg</small>", (n) => { const m = PR(n).mixture; return m ? `${fx(m.CO2.molkg)} <span class="pm">± ${fx(m.CO2.err)}</span> <span class="dim">· N₂ ${fx(m.N2.molkg, 3)}</span>` : null; }],
+    ["WC VSA <small>0.15 → 0.01 bar</small>", (n) => pmv((PR(n).wc || {}).vsa, 2)],
+    ["WC mixture <small>flue → 0.01 bar</small>", (n) => pmv((PR(n).wc || {}).mixture, 2)],
+    ["WC TSA <small>298 → 393 K, 0.15 bar</small>", (n) => pmv((PR(n).wc || {}).tsa, 2)],
+    ["Q<sub>st</sub> CO₂ <small>kJ/mol, Widom ∞ dil.</small>", (n) => pmv((PR(n).qst || {}).widom, 1)],
+    ["Q<sub>st</sub> CO₂ <small>kJ/mol, GCMC 0.01 bar</small>", (n) => pmv((PR(n).qst || {}).fluct_low, 1)],
+    ["K<sub>H</sub> CO₂ <small>mol/(kg·bar)</small>", (n) => pmv((PR(n).k_h || {}).CO2, 1, true)],
     ["sec", "Binding pockets (CO₂-oxygen probe)"],
     ["Strong-binding pore <small>&lt; −10 kJ/mol</small>", (n) => (D(n).pockets ? `${Math.round(100 * D(n).pockets.strong_fraction)}%` : null)],
     ["Deepest well <small>kJ/mol</small>", (n) => (D(n).pockets ? fx(D(n).pockets.min_kjmol, 1) : null)],

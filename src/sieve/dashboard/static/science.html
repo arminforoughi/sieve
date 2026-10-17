@@ -31,6 +31,8 @@
       <a class="btn sm" id="dl-csv" download>Isotherm CSV</a>
       <a class="btn sm" id="dl-cube" download>Energy cube</a>
       <a class="btn sm" id="dl-json" download>JSON</a>
+      <a class="btn sm" id="dl-pcsv" download>Capture CSV</a>
+      <a class="btn sm" id="dl-pjson" download>Capture JSON</a>
     </div>
   </section>
 
@@ -93,7 +95,12 @@
             <span class="tier t1">T1</span> GCMC 100 init + 500 cycles at 1 bar, nominal ±18%: <b>not converged, used only to rank</b>.<br>
             <span class="tier t2">T2</span> GCMC 400 init + 2000 cycles at 1 bar, nominal ±8.6%: the only tier a winner may be named on.</dd>
           <dt>This page</dt><dd>Isotherm: 150 init + 500 cycles at 0.05–5 bar. Pockets: RASPA's 0.5 Å energy grid for the CO₂ oxygen probe; "strong" = below −10 kJ/mol. Run outside every screening budget and cached in <code>data/science/</code>.</dd>
-          <dt>Caveats</dt><dd>Without charges, CO₂'s quadrupole never meets the framework's field, so electrostatically binding sites (open Mg²⁺/Cu²⁺, amines) are missed: Mg-MOF-74 comes out far below experiment. No framework flexibility, no water, no competitive N₂ adsorption. Treat uptakes as a ranking signal for this model, not a lab prediction.</dd>
+          <dt>Capture</dt><dd>
+            <b>Flue gas</b>: 15:85 CO₂:N₂, 1 bar total, 298 K. Binary GCMC (swap + identity-change moves, 200 init + 500 cycles) with TraPPE N₂ (2 LJ sites, 1.10 Å) added to the same force field; no charges on any molecule, as for CO₂.<br>
+            <b>Selectivity</b> S = (x<sub>CO₂</sub>/x<sub>N₂</sub>)/(y<sub>CO₂</sub>/y<sub>N₂</sub>), x = adsorbed loadings in the mixture, y = 0.15/0.85; error from both loadings in quadrature. S₀ = K<sub>H</sub>(CO₂)/K<sub>H</sub>(N₂) is the infinite-dilution limit.<br>
+            <b>WC VSA</b> = N<sub>CO₂</sub>(0.15 bar, 298 K) − N<sub>CO₂</sub>(0.01 bar, 298 K), pure CO₂. <b>WC mixture</b> = CO₂ loading from the flue-gas mixture − N<sub>CO₂</sub>(0.01 bar, 298 K): the more realistic number. <b>WC TSA</b> = N<sub>CO₂</sub>(0.15 bar, 298 K) − N<sub>CO₂</sub>(0.15 bar, 393 K). All in mol/kg.<br>
+            <b>Q<sub>st</sub></b> = −(⟨U<sub>gh</sub>⟩ − ⟨U<sub>h</sub>⟩ − RT) at infinite dilution from Widom insertion (2000 cycles, 298 K), kJ/mol, positive = exothermic; the GCMC fluctuation estimate at 0.01 bar is shown alongside. <b>K<sub>H</sub></b> from the same Widom run, mol/(kg·bar). Q<sub>st</sub> is a whole-molecule energy; the "deepest well" is one CO₂-oxygen site, so Q<sub>st</sub> is typically 1.5–2.5× its magnitude.</dd>
+          <dt>Caveats</dt><dd>Without charges, CO₂'s quadrupole never meets the framework's field, so electrostatically binding sites (open Mg²⁺/Cu²⁺, amines) are missed: Mg-MOF-74 comes out far below experiment. <b>For the same reason CO₂/N₂ selectivity and Q<sub>st</sub> are underestimated for open-metal-site and polar MOFs.</b> No framework flexibility and <b>no water</b>: dry flue gas only, no water competition (which in reality hits open-metal-site MOFs hardest). Treat all values as a ranking signal for this model, not a lab prediction.</dd>
         </dl>
       </section>
     </div>
