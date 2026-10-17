@@ -93,8 +93,7 @@ async function boot() {
   for (const r of cfg.runs) sel.appendChild(new Option(`${r.run_id} · ${r.arm}`, r.run_id, false, r.run_id === want));
   sel.onchange = () => { params.set("run", sel.value); location.search = params.toString(); };
   S.run = want || null;
-  $("nav-agents").href = `/agents?run=${encodeURIComponent(S.run || "")}`;
-  $("nav-disc").href = `/discoveries?run=${encodeURIComponent(S.run || "")}`;
+  if (window.Shell) Shell.setRun(S.run);
   render({ run: null, curves: {} });
   document.querySelectorAll(".filters button").forEach((b) => (b.onclick = () => {
     document.querySelectorAll(".filters button").forEach((x) => x.classList.toggle("on", x === b));

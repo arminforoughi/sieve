@@ -360,9 +360,7 @@ async function boot() {
   for (const r of cfg.runs) sel.appendChild(new Option(`${r.run_id} · ${r.arm}`, r.run_id, false, r.run_id === want));
   sel.onchange = () => { params.set("run", sel.value); location.search = params.toString(); };
   S.run = want;
-  $("tab-room").href = `/?run=${encodeURIComponent(want || "")}`;
-  $("tab-agents").href = `/agents?run=${encodeURIComponent(want || "")}`;
-  $("tab-disc").href = `/discoveries?run=${encodeURIComponent(want || "")}`;
+  if (window.Shell) Shell.setRun(want);
   buildStage();
   fetch("/api/pool").then((r) => r.json()).then((d) => { S.poolPts = d.points; S.poolByName = Object.fromEntries(d.points.map((p) => [p[0], p])); drawPool(); }).catch(() => {});
   if (!want) return;

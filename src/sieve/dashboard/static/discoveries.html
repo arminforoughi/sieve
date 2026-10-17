@@ -2,61 +2,43 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SIEVE Discoveries</title>
-<link rel="stylesheet" href="/static/style.css">
+<title>SIEVE · Discoveries</title>
+<link rel="stylesheet" href="/static/shell.css">
+<link rel="stylesheet" href="/static/discoveries.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.4.0/3Dmol-min.js"></script>
-<style>
-  .dsc { max-width: 1400px; margin: 0 auto; padding: 12px 16px; }
-  .top { display: flex; align-items: center; gap: 16px; margin-bottom: 12px; }
-  .top .brand { font: 600 15px var(--mono); letter-spacing: 0.2em; }
-  .nav a { color: var(--accent); text-decoration: none; font-size: 13px; } .nav b { font-size: 13px; }
-  .top select { margin-left: auto; }
-  .lead { color: var(--ink-2); font-size: 14px; margin: 0 0 12px; }
-  .card { display: grid; grid-template-columns: 340px minmax(0, 1fr) 300px; gap: 16px; background: var(--panel);
-    border: 1px solid var(--border); border-radius: 6px; padding: 16px; margin-bottom: 12px; }
-  .card.rec { border: 2px solid var(--green); }
-  .mv { position: relative; height: 420px; border: 1px solid var(--grid); border-radius: 6px; }
-  .card { grid-template-columns: 460px minmax(0, 1fr) 300px !important; }
-  .tour .tour-gl { position: absolute; inset: 0; }
-  .tour-cap { position: absolute; left: 0; right: 0; bottom: 0; z-index: 2; background: rgba(255,255,255,0.92); border-top: 1px solid var(--grid); padding: 8px 12px; min-height: 76px; }
-  .tour-title { font: 600 13px var(--sans); color: var(--accent); letter-spacing: 0.02em; }
-  .tour-text { font-size: 13px; color: var(--ink); line-height: 1.4; margin-top: 2px; }
-  .tour-ctl { position: absolute; top: 8px; right: 8px; z-index: 2; display: flex; gap: 4px; }
-  .tour-ctl button { width: 26px; height: 26px; border: 1px solid var(--border); background: var(--panel); border-radius: 4px; font: 12px var(--mono); cursor: pointer; color: var(--ink-2); }
-  .tour-ctl button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
-  .tour-wait { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 24px; color: var(--ink-3); font-size: 13px; }
-  .rank { font: 600 12px var(--mono); color: var(--ink-3); letter-spacing: 0.08em; }
-  .name { font: 600 20px var(--mono); margin: 2px 0 4px; }
-  .head { font-size: 16px; font-weight: 600; margin: 8px 0 6px; }
-  .why { font-size: 14px; line-height: 1.5; color: var(--ink); }
-  .feat { margin: 8px 0 0 0; padding-left: 18px; font-size: 13.5px; color: var(--ink-2); }
-  .conf { font-size: 13px; color: var(--ink-2); margin-top: 8px; } .cav { font-size: 12.5px; color: var(--ink-3); margin-top: 4px; }
-  .tag { font: 600 11px var(--mono); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border); color: var(--ink-2); margin-right: 4px; }
-  .tag.ok { color: var(--green); border-color: var(--green); } .tag.rec { background: var(--green); color: #fff; border-color: var(--green); }
-  .tag.veto { color: var(--red); border-color: var(--red); }
-  .bars { display: grid; gap: 6px; }
-  .bar-row { display: grid; grid-template-columns: 1fr 72px; gap: 6px; font-size: 12px; color: var(--ink-2); }
-  .bar-row .track { grid-column: 1 / -1; height: 6px; background: var(--grid); border-radius: 3px; position: relative; }
-  .bar-row .track i { position: absolute; top: -3px; width: 2px; height: 12px; background: var(--accent); }
-  .bar-row .v { text-align: right; font-family: var(--mono); color: var(--ink); }
-  .meas { font: 12.5px var(--mono); color: var(--ink-2); margin-top: 10px; }
-  .meas div { padding: 2px 0; }
-  .who { font-size: 12.5px; color: var(--ink-2); margin-top: 10px; }
-  .muted { color: var(--ink-3); font-size: 13px; }
-  .truth { font: 13px var(--mono); margin-top: 8px; }
-  .mv canvas { width: 100% !important; height: 100% !important; }
-  @media (max-width: 1100px) { .card { grid-template-columns: 1fr !important; } .mv { height: 380px; } }
-  .tour-start { position: absolute; inset: 0; margin: auto; width: 70%; height: 44px; border: 1px solid var(--accent); color: var(--accent); background: var(--panel); border-radius: 6px; font-size: 13px; cursor: pointer; }
-</style>
 </head>
 <body>
-<div class="dsc">
-  <div class="top"><div class="brand">SIEVE</div>
-    <div class="nav"><a id="n-agents" href="/agents">Agents</a> · <a id="n-room" href="/">Control room</a> · <b>Discoveries</b> · <a href="/compare">Compare</a></div>
-    <select id="run-select" aria-label="Run"></select></div>
-  <p class="lead" id="lead"></p>
-  <div id="cards"></div>
-</div>
+<header class="shell" data-page="discoveries" data-runs></header>
+<script src="/static/shell.js"></script>
+<main class="page">
+  <div class="page-head">
+    <div>
+      <h1>Discoveries</h1>
+      <p class="lead" id="lead">Every structure a run measured by GCMC, best first. Click a row for its isotherm, binding pockets and peer review.</p>
+    </div>
+  </div>
+  <div class="summary" id="summary"></div>
+
+  <section class="card" aria-label="Leaderboard">
+    <h2>Leaderboard <span class="sub" id="lb-sub"></span>
+      <span class="tools">
+        <span class="seg" id="scope"><button data-s="run" class="on">This run</button><button data-s="all">All runs</button></span>
+        <a class="btn sm" id="csv" download>Export CSV</a>
+      </span></h2>
+    <div class="lb-filters">
+      <input type="search" id="filter" placeholder="Filter by name or metal…" aria-label="Filter leaderboard">
+      <label><input type="checkbox" id="only-t2"> tier-2 confirmed only</label>
+      <span class="note" id="lb-count"></span>
+    </div>
+    <div class="tbl-wrap lb-wrap"><table class="t lb" id="lb"></table></div>
+    <p class="note legend-note"><span class="tier t2">T2</span> confirmed: 400 + 2000 GCMC cycles, the only basis for naming a winner. <span class="tier t1">T1</span> screening: 100 + 500 cycles, not converged (nominal ±18%), used only to rank. Uptake is absolute CO₂ loading at 298 K, 1 bar, mol/kg, ± 1σ; SieveUFF without framework charges.</p>
+  </section>
+
+  <section aria-label="Top structures">
+    <div class="sec-h"><h2>Top structures in this run</h2><span class="note" id="cards-note"></span></div>
+    <div id="cards" class="cards"><div class="card"><span class="spin"></span> Loading…</div></div>
+  </section>
+</main>
 <script src="/static/tour.js"></script>
 <script src="/static/discoveries.js"></script>
 </body>

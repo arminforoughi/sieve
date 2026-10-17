@@ -1,0 +1,55 @@
+.summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--gap); margin-bottom: var(--gap); }
+.summary .stat { background: var(--panel); border: 1px solid var(--border); border-radius: var(--r); padding: 12px 16px; min-width: 0; }
+.summary .stat .k { font-size: 12px; color: var(--ink-3); }
+.summary .stat .v { font: 500 22px var(--mono); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.summary .stat .v small { font-size: 13px; color: var(--ink-3); }
+.summary .stat .s { font-size: 12.5px; color: var(--ink-2); margin-top: 2px; }
+.summary .callout { grid-column: 1 / -1; }
+
+.lb-filters { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; font-size: 13px; color: var(--ink-2); }
+.lb-filters input[type=search] { width: 260px; max-width: 100%; }
+.lb-wrap { max-height: 560px; overflow: auto; border: 1px solid var(--grid); border-radius: 6px; }
+.lb thead th { position: sticky; top: 0; z-index: 1; }
+.lb td.name { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
+.lb td.name a { color: var(--ink); text-decoration: none; }
+.lb tr:hover td.name a { color: var(--accent-ink); text-decoration: underline; }
+.lb td.rk { color: var(--ink-3); font: 11px var(--mono); }
+.lb .metal { font: 11.5px var(--mono); color: var(--ink-2); }
+.lb .sci-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-left: 6px; vertical-align: 1px; }
+.legend-note { margin: 10px 0 0; }
+.legend-note .tier { margin-right: 2px; }
+
+.sec-h { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin: 22px 0 10px; }
+.sec-h h2 { font-size: 16px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 440px), 1fr)); gap: var(--gap); }
+.dcard { display: flex; flex-direction: column; gap: 8px; }
+.dcard.rec { border: 2px solid var(--green); }
+.dcard .top { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.dcard .rank { font: 600 12px var(--mono); color: var(--ink-3); }
+.dcard .name { font: 600 18px var(--mono); }
+.dcard .val { margin-left: auto; font: 500 20px var(--mono); white-space: nowrap; }
+.dcard .val small { font-size: 12px; color: var(--ink-3); }
+.dcard .tags { display: flex; gap: 4px; flex-wrap: wrap; }
+.dcard .head { font-weight: 600; }
+.dcard .why { color: var(--ink); font-size: 13.5px; }
+.dcard .feat { margin: 0; padding-left: 18px; font-size: 13px; color: var(--ink-2); }
+.dcard .pending { font-size: 12.5px; color: var(--ink-3); background: var(--bg); border-radius: 6px; padding: 8px 10px; }
+.bars { display: grid; grid-template-columns: minmax(0, 1fr) 64px; gap: 4px 10px; font-size: 12px; color: var(--ink-2); align-items: center; }
+.bars .v { text-align: right; font-family: var(--mono); color: var(--ink); }
+.bars .track { grid-column: 1 / -1; height: 4px; background: var(--grid); border-radius: 2px; position: relative; margin-bottom: 2px; }
+.bars .track i { position: absolute; top: -3px; width: 2px; height: 10px; background: var(--accent); }
+.meas { font: 12px var(--mono); color: var(--ink-2); }
+.who { font-size: 12.5px; color: var(--ink-2); }
+.dcard .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; padding-top: 4px; }
+.mv { position: relative; height: 340px; border: 1px solid var(--grid); border-radius: 6px; }
+
+/* 3D tour (tour.js) */
+.tour .tour-gl { position: absolute; inset: 0; }
+.tour-cap { position: absolute; left: 0; right: 0; bottom: 0; z-index: 2; background: rgba(255,255,255,0.92); border-top: 1px solid var(--grid); padding: 8px 12px; min-height: 64px; }
+.tour-title { font: 600 13px var(--sans); color: var(--accent-ink); }
+.tour-text { font-size: 13px; color: var(--ink); line-height: 1.4; margin-top: 2px; }
+.tour-ctl { position: absolute; top: 8px; right: 8px; z-index: 2; display: flex; gap: 4px; }
+.tour-ctl button { width: 26px; height: 26px; border: 1px solid var(--border); background: var(--panel); border-radius: 4px; font: 12px var(--mono); cursor: pointer; color: var(--ink-2); }
+.tour-ctl button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.tour-wait { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 24px; color: var(--ink-3); font-size: 13px; }
+.mv canvas { width: 100% !important; height: 100% !important; }

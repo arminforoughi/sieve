@@ -3,20 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SIEVE Agent Flow</title>
+<title>SIEVE · Agents</title>
+<link rel="stylesheet" href="/static/shell.css">
 <link rel="stylesheet" href="/static/style.css">
 <link rel="stylesheet" href="/static/agents.css">
 </head>
 <body>
+<header class="shell" data-page="agents" data-runs></header>
+<script src="/static/shell.js"></script>
 <div class="ag-app">
   <header class="ag-top">
-    <div class="brand">SIEVE</div>
-    <nav class="tabs">
-      <a id="tab-agents" class="on" href="#">Agents</a>
-      <a id="tab-room" href="#">Control room</a>
-      <a id="tab-disc" href="/discoveries">Discoveries</a>
-      <a id="tab-compare" href="/compare">Compare</a>
-    </nav>
     <div class="ag-vitals">
       <div class="kv"><span class="k">human interventions</span><span class="v mono big" id="a-int">0</span></div>
       <div class="kv"><span class="k">round</span><span class="v mono" id="a-round">–</span></div>
@@ -24,7 +20,6 @@
       <div class="kv"><span class="k">best found</span><span class="v mono" id="a-best">–</span><span class="sub" id="a-best-sub"></span></div>
       <div class="kv"><span class="k">model calls <em>tokens</em></span><span class="v mono" id="a-tokens">–</span><span class="sub" id="a-split"></span></div>
     </div>
-    <div class="runrow"><span class="badge" id="replay" hidden>REPLAY 20&times;</span><select id="run-select" aria-label="Run"></select></div>
   </header>
 
   <section class="panel ag-stage" aria-label="Agent team">

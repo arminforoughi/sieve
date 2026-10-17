@@ -468,6 +468,113 @@ def cif_payload(name: str) -> dict:
             "void": [[round(float(v), 2) for v in p] for p in void]}
 
 
+@lru_cache(maxsize=1)
+def pool_index() -> dict[str, dict]:
+    """Every pool structure's tier-0 descriptors from data/pool.jsonl (read once, ~12k rows)."""
+    from sieve.oracle import PROJECT_ROOT
+
+    out: dict[str, dict] = {}
+    path = PROJECT_ROOT / "data" / "pool.jsonl"
+    if not path.exists():
+        return out
+    num = lambda x, k=3: None if x is None else round(float(x), k)  # noqa: E731
+    with open(path) as f:
+        for line in f:
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            c = d.get("core") or {}
+            out[d["structure"]] = {
+                "name": d["structure"], "PLD": num(c.get("PLD")), "LCD": num(c.get("LCD")),
+                "VF": num(c.get("AV_VF")), "ASA": num(c.get("ASA_m2_g"), 0),
+                "density": num(d.get("density")), "metals": d.get("metals") or [],
+                "oms": (c.get("Has_OMS") or "").lower().startswith("y"),
+                "n_atoms": d.get("n_atoms"), "parse_ok": bool(d.get("parse_ok"))}
+    return out
+
+
+def _science_ready(name: str) -> bool:
+    from sieve.oracle import PROJECT_ROOT, raspa_alias
+    return (PROJECT_ROOT / "data" / "science" / f"{raspa_alias(name)}.json").exists()
+
+
+def search(q: str, limit: int = 30) -> list[dict]:
+    """Pool structures whose name contains q (prefix matches first)."""
+    idx = pool_index()
+    q = (q or "").strip().lower()
+    if not q:
+        return []
+    hits = [n for n in idx if q in n.lower()]
+    hits.sort(key=lambda n: (not n.lower().startswith(q), len(n), n))
+    return [{**idx[n], "science": _science_ready(n)} for n in hits[:limit]]
+
+
+def _estimates(con: sqlite3.Connection, run_id: str) -> dict:
+    from sieve.store import estimates_from_evaluations
+    return estimates_from_evaluations(con, run_id)
+
+
+def leaderboard(db: str, run_id: str) -> dict:
+    """Every structure the run measured by GCMC (tier >= 1), with its best estimate and descriptors.
+    run_id='*' merges all runs, keeping each structure's highest-tier estimate."""
+    con = _con(db)
+    runs = {r["run_id"]: r for r in list_runs(db)}
+    ids = list(runs) if run_id == "*" else [run_id]
+    merged: dict[str, dict] = {}
+    for rid in ids:
+        if rid not in runs:
+            continue
+        for s, e in _estimates(con, rid).items():
+            row = {"structure": s, "uptake": round(e.uptake, 4), "err": round(e.err, 4), "tier": e.tier,
+                   "n": e.n_evals, "run": rid, "arm": runs[rid]["arm"],
+                   "t1": None, "t2": None}
+            for t, vals in e.tiers.items():
+                row[f"t{t}"] = round(sum(u for u, _ in vals) / len(vals), 4)
+            prev = merged.get(s)
+            if prev is None or (row["tier"], -row["err"]) > (prev["tier"], -prev["err"]):
+                merged[s] = row
+    idx = pool_index()
+    rows = []
+    for s, r in merged.items():
+        d = idx.get(s, {})
+        rows.append({**r, "PLD": d.get("PLD"), "LCD": d.get("LCD"), "VF": d.get("VF"),
+                     "density": d.get("density"), "metals": d.get("metals", []), "oms": d.get("oms"),
+                     "science": _science_ready(s)})
+    rows.sort(key=lambda r: r["uptake"], reverse=True)
+    return {"run": dict(runs[run_id]) if run_id in runs else None, "rows": rows}
+
+
+def runs_summary(db: str) -> list[dict]:
+    """Per run: spend, how many structures each tier measured, best tier-1 and best tier-2 value."""
+    con = _con(db)
+    out = []
+    for r in list_runs(db):
+        rid = r["run_id"]
+        spent = con.execute("SELECT COALESCE(SUM(cpu_s),0) FROM evaluations WHERE run_id=? AND "
+                            "status!='running'", (rid,)).fetchone()[0]
+        counts = {t: n for t, n in con.execute(
+            "SELECT tier, COUNT(DISTINCT structure) FROM evaluations WHERE run_id=? AND status='ok' "
+            "GROUP BY tier", (rid,))}
+        est = _estimates(con, rid)
+        best = lambda tier: max((e for e in est.values() if e.tier == tier),  # noqa: E731
+                                key=lambda e: e.uptake, default=None)
+        pack = lambda e: ({"structure": e.structure, "uptake": round(e.uptake, 4),  # noqa: E731
+                           "err": round(e.err, 4)} if e else None)
+        out.append({**r, "spent_cpu_s": round(spent, 1), "n_t1": counts.get(1, 0),
+                    "n_t2": counts.get(2, 0), "best_t1": pack(best(1)), "best_t2": pack(best(2))})
+    return out
+
+
+def measurements(db: str, name: str) -> list[dict]:
+    """Every GCMC measurement of one structure, across all runs."""
+    con = _con(db)
+    return [dict(r) for r in con.execute(
+        "SELECT e.run_id, r.arm, e.tier, ROUND(e.uptake_molkg, 4) AS uptake, ROUND(e.uptake_err, 4) AS err, "
+        "ROUND(e.cpu_s, 1) AS cpu_s, e.mode, e.finished_at FROM evaluations e JOIN runs r USING (run_id) "
+        "WHERE e.structure=? AND e.tier>0 AND e.status='ok' ORDER BY e.tier DESC, e.finished_at", (name,))]
+
+
 def events_after(db: str, run_id: str, after: int, T: float, limit: int = 500) -> list[dict]:
     con = _con(db)
     if not _has(con, "events"):
@@ -499,6 +606,7 @@ def create_app(db: str, replay_run: str | None = None) -> FastAPI:
         if request.url.path == "/" or request.url.path.startswith("/static"):
             resp.headers["Cache-Control"] = "no-cache"
         return resp
+    sci_started: dict[str, float] = {}  # name -> when this server first saw it computing
     replay = {"run": replay_run, "t0": None, "ts0": None}  # the clock starts with the first viewer
 
     def clock(run_id: str | None) -> float:
@@ -514,10 +622,14 @@ def create_app(db: str, replay_run: str | None = None) -> FastAPI:
     def page(fname: str):
         from fastapi.responses import HTMLResponse
 
+        import re
+
         html = (STATIC / fname).read_text()
-        for asset in ("app.js", "style.css", "agents.js", "agents.css", "discoveries.js", "tour.js"):  # version by mtime
-            if (STATIC / asset).exists():
-                html = html.replace(f"/static/{asset}", f"/static/{asset}?v={int((STATIC / asset).stat().st_mtime)}")
+
+        def ver(m):  # version every local asset by mtime so a browser never runs a stale one
+            f = STATIC / m.group(1)
+            return f"/static/{m.group(1)}?v={int(f.stat().st_mtime)}" if f.exists() else m.group(0)
+        html = re.sub(r"/static/([\w.-]+\.(?:js|css))", ver, html)
         return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
     @app.get("/")
@@ -535,6 +647,59 @@ def create_app(db: str, replay_run: str | None = None) -> FastAPI:
     @app.get("/discoveries")
     def discoveries_page():
         return page("discoveries.html")
+
+    @app.get("/guide")
+    def guide_page():
+        return page("guide.html")
+
+    @app.get("/api/search")
+    def api_search(q: str = "", limit: int = 30):
+        return search(q, min(limit, 100))
+
+    @app.get("/api/leaderboard")
+    def api_leaderboard(run: str):
+        return leaderboard(db, run)
+
+    @app.get("/api/runs/summary")
+    def api_runs_summary():
+        return runs_summary(db)
+
+    @app.get("/api/measurements")
+    def api_measurements(name: str):
+        return {"name": name, "pool": pool_index().get(name), "rows": measurements(db, name)}
+
+    @app.get("/api/download/{kind}")
+    def api_download(kind: str, name: str):
+        """Files a scientist can take away: the simulated CIF, the energy cube, the isotherm."""
+        from fastapi.responses import PlainTextResponse, Response
+        from sieve import science
+
+        stem = name.replace("/", "_")
+        att = lambda fn: {"Content-Disposition": f'attachment; filename="{fn}"'}  # noqa: E731
+        if kind == "cif":
+            p = cif_payload(name)
+            if p.get("error"):
+                return Response(p["error"], status_code=404)
+            return PlainTextResponse(p["cif"], headers=att(f"{stem}.cif"))
+        if kind == "cube":
+            p = science.cube_path(name)
+            if not p.exists():
+                return Response("no energy grid computed yet", status_code=404)
+            return FileResponse(p, media_type="text/plain", headers=att(f"{stem}-co2-probe-energy.cube"))
+        d = science.cached(name)
+        if d is None:
+            return Response("science data not computed yet", status_code=404)
+        if kind == "isotherm.csv":
+            rows = ["pressure_bar,uptake_molkg,uptake_err_molkg,temperature_K,forcefield"]
+            rows += [f"{q['p_bar']},{'' if q['uptake'] is None else q['uptake']},"
+                     f"{'' if q['err'] is None else q['err']},298,SieveUFF (UFF LJ + TraPPE CO2; no framework charges)"
+                     for q in d.get("isotherm", [])]
+            return PlainTextResponse("\n".join(rows) + "\n", media_type="text/csv",
+                                     headers=att(f"{stem}-isotherm-298K.csv"))
+        if kind == "json":
+            return Response(json.dumps(d, indent=1), media_type="application/json",
+                            headers=att(f"{stem}-science.json"))
+        return Response("unknown download", status_code=404)
 
     @app.get("/api/discoveries")
     def api_discoveries(run: str):
@@ -575,6 +740,55 @@ def create_app(db: str, replay_run: str | None = None) -> FastAPI:
         if out.get("status") == "ready":
             out["cif"] = cif_payload(name).get("cif")
         return out
+
+    @app.get("/science")
+    def science_page():
+        return page("science.html")
+
+    @app.get("/api/science")
+    def api_science(name: str):
+        from sieve import science
+        out = science.get(name)
+        if out.get("status") == "computing":
+            out["since"] = sci_started.setdefault(name, time.time())
+        if out.get("status") == "ready":
+            out["cif"] = cif_payload(name).get("cif")
+        return out
+
+    @app.get("/api/science/cube")
+    def api_science_cube(name: str):
+        from fastapi.responses import PlainTextResponse
+        from sieve import science
+        p = science.cube_path(name)
+        return PlainTextResponse(p.read_text() if p.exists() else "", headers={"Cache-Control": "max-age=3600"})
+
+    @app.get("/api/review")
+    def api_review(name: str):
+        from sieve.agents import reviewer
+        return reviewer.get(name)
+
+    @app.get("/api/science/list")
+    def api_science_list():
+        from sieve import science
+        typical = (Path(__file__).resolve().parents[3] / "data" / "science-typical.txt")
+        items = [{"name": "ZADREE_clean", "role": "best confirmed on the full pool"},
+                 {"name": "Cu-BTC", "role": "reference: HKUST-1"},
+                 {"name": "MgMOF-74-VASP", "role": "reference: Mg-MOF-74"}]
+        if typical.exists():
+            items.append({"name": typical.read_text().strip(), "role": "a typical pool structure (median)"})
+        seen = {i["name"] for i in items}
+        if science.SCI_DIR.exists():  # anything a scientist asked for earlier, newest first
+            extra = sorted((f for f in science.SCI_DIR.glob("*.json") if not f.name.startswith("review-")),
+                           key=lambda f: f.stat().st_mtime, reverse=True)
+            for f in extra:
+                try:
+                    n = json.loads(f.read_text()).get("name") or f.stem
+                except ValueError:
+                    continue
+                if n not in seen:
+                    seen.add(n)
+                    items.append({"name": n, "role": "computed on request"})
+        return [{**i, "ready": (science.SCI_DIR / f"{i['name']}.json").exists()} for i in items]
 
     @app.get("/api/cif")
     def api_cif(name: str):

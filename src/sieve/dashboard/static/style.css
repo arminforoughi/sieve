@@ -1,32 +1,5 @@
-:root {
-  --bg: #F4F5F7;
-  --panel: #FFFFFF;
-  --border: #E2E5EA;
-  --grid: #EEF0F3;
-  --ink: #15171C;
-  --ink-2: #4A505B;
-  --ink-3: #7C828E;
-  --idle: #B9BEC7;
-  --accent: #0B8A98;
-  --accent-soft: rgba(11, 138, 152, 0.12);
-  --red: #D7353A;
-  --red-soft: rgba(215, 53, 58, 0.10);
-  --green: #1E9B62;
-  --sans: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  color-scheme: light;
-}
-
-* { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); }
-body { font: 14px/1.4 var(--sans); }
-.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
-.dim { color: var(--ink-3); }
-[hidden] { display: none !important; }
-em { font-style: normal; color: var(--ink-3); font-size: 11px; margin-left: 4px; }
-
 .app {
-  display: grid; gap: 8px; padding: 8px; height: 100vh; min-height: 760px;
+  display: grid; gap: 8px; padding: 8px; height: calc(100vh - var(--shell-h)); min-height: 720px;
   grid-template-columns: repeat(12, minmax(0, 1fr));
   grid-template-rows: auto auto auto minmax(0, 1.25fr) auto minmax(0, 1fr);
   grid-template-areas:
@@ -49,9 +22,9 @@ em { font-style: normal; color: var(--ink-3); font-size: 11px; margin-left: 4px;
 .hero { grid-area: hero; display: flex; align-items: stretch; gap: 8px; }
 .hero-main { display: flex; align-items: center; gap: 16px; padding: 4px 24px 4px 16px; background: var(--panel);
   border: 1px solid var(--border); border-radius: 6px; }
-.hero-num { font-size: 88px; font-weight: 600; line-height: 0.95; letter-spacing: -0.02em; }
+.hero-num { font-size: 64px; font-weight: 600; line-height: 0.95; letter-spacing: -0.02em; }
 .hero-label { font-size: 15px; line-height: 1.25; color: var(--ink-2); }
-.strip { flex: 1; display: flex; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; }
+.strip { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; }
 .kv { display: flex; flex-direction: column; justify-content: center; gap: 2px; padding: 8px 20px;
   border-left: 1px solid var(--border); min-width: 0; }
 .kv:first-child { border-left: 0; }
@@ -59,6 +32,8 @@ em { font-style: normal; color: var(--ink-3); font-size: 11px; margin-left: 4px;
 .kv .k { font-size: 12px; color: var(--ink-3); white-space: nowrap; }
 .kv .v { font-size: 22px; font-weight: 500; white-space: nowrap; }
 .kv .sub { font-size: 12px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 340px; }
+.strip .kv { flex: 1 1 auto; }
+.strip .kv .v { font-size: 20px; }
 .bar { position: relative; display: block; height: 3px; background: var(--grid); border-radius: 2px; overflow: hidden; margin-top: 4px; }
 .bar i { position: absolute; inset: 0 auto 0 0; width: 0; background: var(--accent); transition: width 400ms; }
 .bar b { position: absolute; top: 0; bottom: 0; width: 0; background: var(--accent); opacity: 0.3; transition: left 400ms, width 400ms; }
@@ -177,7 +152,7 @@ select { background: var(--panel); color: var(--ink); border: 1px solid var(--bo
 @keyframes ev-in { from { transform: translateY(-6px); opacity: 0; } to { transform: none; opacity: 1; } }
 
 @media (max-width: 1100px) {
-  .app { height: auto; grid-template-columns: 1fr; grid-template-rows: none;
+  .app { height: auto; min-height: 0; grid-template-columns: 1fr; grid-template-rows: none;
     grid-template-areas: "hero" "head" "banner" "stage" "scatter" "workers" "agents" "progress" "stream"; }
   .hero { flex-wrap: wrap; } .strip { flex-wrap: wrap; }
   .stage, .scatter { height: 360px; } .agents, .progress, .stream { height: 300px; }
@@ -206,3 +181,16 @@ select { background: var(--panel); color: var(--ink); border: 1px solid var(--bo
 .navlinks { font: 13px var(--sans) !important; letter-spacing: 0 !important; color: var(--ink-3); }
 .navlinks a { color: var(--accent); text-decoration: none; }
 .navlinks b { color: var(--ink); font-weight: 600; }
+
+/* never wider than the window: every grid child may shrink, the hero wraps */
+.app > * { min-width: 0; }
+.hero { min-width: 0; flex-wrap: wrap; }
+.hero-main { flex: 0 0 auto; }
+@media (max-width: 1400px) { .hero-num { font-size: 48px; } .strip .kv { padding: 6px 14px; } }
+@media (max-width: 700px) {
+  .hero-main { flex: 1 1 100%; }
+  .strip .kv { flex: 1 1 45%; border-left: 0; border-top: 1px solid var(--border); }
+  .events li { grid-template-columns: 56px minmax(0, 1fr); }
+  .events li .who, .events li .verb { display: none; }
+  .agent-rows li { grid-template-columns: 12px 90px minmax(0, 1fr); }
+}

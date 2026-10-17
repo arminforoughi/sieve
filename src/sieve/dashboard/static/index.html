@@ -3,12 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SIEVE Control Room</title>
+<title>SIEVE · Control room</title>
+<link rel="stylesheet" href="/static/shell.css">
 <link rel="stylesheet" href="/static/style.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.4.0/3Dmol-min.js"></script>
 </head>
 <body>
+<header class="shell" data-page="room" data-runs></header>
+<script src="/static/shell.js"></script>
 <div class="app">
   <header class="hero">
     <div class="hero-main" aria-label="Human interventions">
@@ -25,13 +28,6 @@
       <div class="kv wide"><span class="k">Best uptake <em>mol/kg</em></span>
         <span class="v mono"><span id="s-best">&ndash;</span> <span class="chip" id="s-best-chip"></span></span>
         <span class="sub" id="s-best-sub">&nbsp;</span></div>
-    </div>
-    <div class="runbox">
-      <div class="brand">SIEVE <span class="navlinks"><a href="#" id="nav-agents">Agents</a> · <b>Control room</b> · <a href="/discoveries" id="nav-disc">Discoveries</a> · <a href="/compare">Compare</a></span></div>
-      <div class="runrow">
-        <span class="badge" id="replay" hidden>REPLAY 20&times;</span>
-        <select id="run-select" aria-label="Run"></select>
-      </div>
     </div>
   </header>
 
