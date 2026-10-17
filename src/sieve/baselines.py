@@ -23,7 +23,7 @@ import time
 from sieve import pool
 from sieve.oracle import CostModel, Descriptors
 from sieve.store import Store, estimates_from_evaluations, resume
-from sieve.workers import WorkerConfig, WorkerPool, default_workers
+from sieve.workers import InlineExecutor, WorkerConfig, WorkerPool, default_workers
 
 ARMS = ("random", "descriptor", "uniform")
 MIN_USEFUL_CPU_S = 5.0  # below this nothing fits; stop
@@ -67,7 +67,9 @@ def _close_rounds(st: Store, run_id: str) -> None:
 
 def run_arm(arm: str, db_path: str, budget_cpu_s: float = 4 * 3600.0, n_workers: int | None = None,
             seed: int = 0, run_id: str | None = None, cost_model: CostModel | None = None,
-            limit: int | None = None) -> str:
+            limit: int | None = None, candidates: list[str] | None = None,
+            replay: dict | None = None) -> str:
+    """candidates: restrict the pool (the arena). replay: run against ReplayOracle, inline."""
     assert arm in ARMS, arm
     st = Store(db_path)
     n_workers = n_workers or default_workers()
@@ -76,18 +78,25 @@ def run_arm(arm: str, db_path: str, budget_cpu_s: float = 4 * 3600.0, n_workers:
         budget_cpu_s, seed = state.budget_cpu_s, state.config["seed"]
         cost_model = CostModel(**state.config["cost_model"])
         limit = state.config.get("limit")
+        candidates = state.config.get("candidates")
+        replay = state.config.get("replay")
     else:
         cost_model = cost_model or CostModel()
         run_id = st.create_run(arm, budget_cpu_s, {
-            "seed": seed, "n_workers": n_workers, "limit": limit,
-            "cost_model": cost_model.__dict__, "pool": "CoRE-2019-ASR, PLD >= 3.3 A"}, run_id)
+            "seed": seed, "n_workers": n_workers, "limit": limit, "candidates": candidates,
+            "replay": replay, "cost_model": cost_model.__dict__,
+            "pool": "arena" if candidates else "CoRE-2019-ASR, PLD >= 3.3 A"}, run_id)
 
-    cands = pool.load_candidates()
+    if candidates:
+        cands = [pool.Candidate(n, pool.cif_path(n)) for n in candidates]
+    else:
+        cands = pool.load_candidates()
     if limit:
         cands = random.Random(seed).sample(cands, min(limit, len(cands)))
     tier = 2 if arm == "uniform" else 1
-    cfg = WorkerConfig(db_path, run_id, budget_cpu_s, cost_model)
-    wp = WorkerPool(cfg, n_workers, parent_agent=f"{arm}-driver")
+    cfg = WorkerConfig(db_path, run_id, budget_cpu_s, cost_model, replay=replay)
+    Executor = InlineExecutor if replay else WorkerPool
+    wp = Executor(cfg, n_workers, parent_agent=f"{arm}-driver")
     st.upsert_agent(run_id, f"{arm}-driver", "orchestrator", model=None, state="working")
     wp.start()
     try:

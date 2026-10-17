@@ -46,6 +46,7 @@ class WorkerConfig:
     budget_cpu_s: float
     cost_model: CostModel
     cif_dir: str = str(pool.CIF_DIR)
+    replay: dict | None = None  # {"truth_db", "seed", "noise": NoiseModel fields}: ReplayOracle
 
 
 def _watch_parent(parent: int) -> None:
@@ -69,10 +70,77 @@ def load_descriptors(o: Oracle, structure: str, cif_dir: str, worker_id: str) ->
     return o.tier0(pool.cif_path(structure, cif_dir), worker_id=worker_id)
 
 
+def make_oracle(cfg: WorkerConfig) -> Oracle:
+    replay = getattr(cfg, "replay", None)  # getattr: configs pickled by an older parent
+    if replay:
+        from sieve.oracle import NoiseModel, ReplayOracle
+        return ReplayOracle(cfg.db_path, cfg.run_id, replay["truth_db"],
+                            NoiseModel(**replay["noise"]), replay["seed"],
+                            budget_cpu_s=cfg.budget_cpu_s, cost_model=cfg.cost_model)
+    return Oracle(cfg.db_path, cfg.run_id, budget_cpu_s=cfg.budget_cpu_s, labels_path=None)
+
+
+def run_task(st: Store, o: Oracle, cfg: WorkerConfig, worker_id: str, task) -> None:
+    """Execute one claimed task and record its outcome. Shared by pool workers and inline runs."""
+    tid, s, tier = task["task_id"], task["structure"], task["tier"]
+    st.set_agent_state(worker_id, "working")
+    try:
+        desc = load_descriptors(o, s, cfg.cif_dir, worker_id)
+        if tier == 0:  # descriptors only; no per-structure event (thousands of these)
+            st.finish_task(tid, "done" if desc.parse_ok else "error", None)
+            return
+        if not desc.parse_ok:
+            st.finish_task(tid, "error", None)
+            st.event(cfg.run_id, "task_error", {"task": tid, "structure": s, "tier": tier,
+                                                "error": desc.error}, agent_id=worker_id)
+            return
+        plan = o.plan(desc, tier, task["mode"], cfg.cost_model)
+        if o.remaining() < plan.est_cpu_s:
+            raise BudgetExhausted(f"{s} tier {tier}: needs ~{plan.est_cpu_s:.0f}s, "
+                                  f"{o.remaining():.0f}s left")
+        st.event(cfg.run_id, "task_start", {
+            "task": tid, "structure": s, "tier": tier, "mode": plan.mode,
+            "est_cpu_s": round(plan.est_cpu_s, 1), "build_grid": plan.build_grid,
+            "limit_cpu_s": round(o.cpu_limit(plan, tier), 1),
+            "n_atoms_sim": desc.n_atoms_sim}, agent_id=worker_id)
+        ev = o.simulate(desc, tier, task["mode"], worker_id=worker_id, cost_model=cfg.cost_model)
+    except BudgetExhausted as e:
+        st.finish_task(tid, "skipped", None)
+        st.event(cfg.run_id, "budget_refused", {"task": tid, "structure": s, "tier": tier,
+                                                "reason": str(e)}, agent_id=worker_id)
+        return
+    except Exception as e:  # a bug in one task must not take the worker down
+        st.finish_task(tid, "error", None)
+        st.event(cfg.run_id, "task_error", {"task": tid, "structure": s, "tier": tier,
+                                            "error": f"{type(e).__name__}: {e}",
+                                            "trace": traceback.format_exc()[-1500:]},
+                 agent_id=worker_id)
+        return
+    finally:
+        st.set_agent_state(worker_id, "idle")
+    status = {"ok": "done"}.get(ev.status, ev.status)
+    st.finish_task(tid, status, ev.eval_id)
+    payload = {"task": tid, "eval_id": ev.eval_id, "structure": s, "tier": tier,
+               "mode": ev.mode, "cpu_s": round(ev.cpu_s, 1), "est_cpu_s": round(ev.est_cpu_s, 1),
+               "n_atoms_sim": desc.n_atoms_sim}
+    if ev.status == "ok":
+        st.event(cfg.run_id, "task_done", {**payload, "uptake": ev.uptake_molkg,
+                                           "err": ev.uptake_err}, agent_id=worker_id)
+    elif ev.status == "timeout":
+        phase = ev.result["phases"][-1]
+        st.event(cfg.run_id, "timeout", {**payload, "phase": phase["kind"],
+                                         "limit_cpu_s": round(ev.timeout_s, 1),
+                                         "killed_by": phase.get("killed_by")},
+                 agent_id=worker_id)
+    else:
+        st.event(cfg.run_id, "task_error", {**payload, "error": ev.result["phases"][-1].get(
+            "stderr", "")[-500:]}, agent_id=worker_id)
+
+
 def worker_main(cfg: WorkerConfig, worker_id: str, stop: mp.Event) -> None:
     threading.Thread(target=_watch_parent, args=(os.getppid(),), daemon=True).start()
     st = Store(cfg.db_path)
-    o = Oracle(cfg.db_path, cfg.run_id, budget_cpu_s=cfg.budget_cpu_s, labels_path=None)
+    o = make_oracle(cfg)
     st.upsert_agent(cfg.run_id, worker_id, "worker", state="idle")
     st.event(cfg.run_id, "worker_start", {"pid": os.getpid()}, agent_id=worker_id)
     while not stop.is_set():
@@ -80,61 +148,39 @@ def worker_main(cfg: WorkerConfig, worker_id: str, stop: mp.Event) -> None:
         if task is None:
             time.sleep(POLL_S)
             continue
-        tid, s, tier = task["task_id"], task["structure"], task["tier"]
-        st.set_agent_state(worker_id, "working")
-        try:
-            desc = load_descriptors(o, s, cfg.cif_dir, worker_id)
-            if tier == 0:  # descriptors only; no per-structure event (thousands of these)
-                st.finish_task(tid, "done" if desc.parse_ok else "error", None)
-                continue
-            if not desc.parse_ok:
-                st.finish_task(tid, "error", None)
-                st.event(cfg.run_id, "task_error", {"task": tid, "structure": s, "tier": tier,
-                                                    "error": desc.error}, agent_id=worker_id)
-                continue
-            plan = o.plan(desc, tier, task["mode"], cfg.cost_model)
-            if o.remaining() < plan.est_cpu_s:
-                raise BudgetExhausted(f"{s} tier {tier}: needs ~{plan.est_cpu_s:.0f}s, "
-                                      f"{o.remaining():.0f}s left")
-            st.event(cfg.run_id, "task_start", {
-                "task": tid, "structure": s, "tier": tier, "mode": plan.mode,
-                "est_cpu_s": round(plan.est_cpu_s, 1), "build_grid": plan.build_grid,
-                "limit_cpu_s": round(o.cpu_limit(plan, tier), 1),
-                "n_atoms_sim": desc.n_atoms_sim}, agent_id=worker_id)
-            ev = o.simulate(desc, tier, task["mode"], worker_id=worker_id,
-                            cost_model=cfg.cost_model)
-        except BudgetExhausted as e:
-            st.finish_task(tid, "skipped", None)
-            st.event(cfg.run_id, "budget_refused", {"task": tid, "structure": s, "tier": tier,
-                                                    "reason": str(e)}, agent_id=worker_id)
-            continue
-        except Exception as e:  # a bug in one task must not take the worker down
-            st.finish_task(tid, "error", None)
-            st.event(cfg.run_id, "task_error", {"task": tid, "structure": s, "tier": tier,
-                                                "error": f"{type(e).__name__}: {e}",
-                                                "trace": traceback.format_exc()[-1500:]},
-                     agent_id=worker_id)
-            continue
-        finally:
-            st.set_agent_state(worker_id, "idle")
-        status = {"ok": "done"}.get(ev.status, ev.status)
-        st.finish_task(tid, status, ev.eval_id)
-        payload = {"task": tid, "eval_id": ev.eval_id, "structure": s, "tier": tier,
-                   "mode": ev.mode, "cpu_s": round(ev.cpu_s, 1), "est_cpu_s": round(ev.est_cpu_s, 1),
-                   "n_atoms_sim": desc.n_atoms_sim}
-        if ev.status == "ok":
-            st.event(cfg.run_id, "task_done", {**payload, "uptake": ev.uptake_molkg,
-                                               "err": ev.uptake_err}, agent_id=worker_id)
-        elif ev.status == "timeout":
-            phase = ev.result["phases"][-1]
-            st.event(cfg.run_id, "timeout", {**payload, "phase": phase["kind"],
-                                             "limit_cpu_s": round(ev.timeout_s, 1),
-                                             "killed_by": phase.get("killed_by")},
-                     agent_id=worker_id)
-        else:
-            st.event(cfg.run_id, "task_error", {**payload, "error": ev.result["phases"][-1].get(
-                "stderr", "")[-500:]}, agent_id=worker_id)
+        run_task(st, o, cfg, worker_id, task)
     st.set_agent_state(worker_id, "exited")
+
+
+class InlineExecutor:
+    """Drop-in for WorkerPool that runs queued tasks synchronously in this process.
+
+    For replay seeds, where a 'GCMC call' is a draw and processes would only add overhead.
+    supervise() drains the queue, so drivers written against WorkerPool work unchanged.
+    """
+
+    def __init__(self, cfg: WorkerConfig, n: int | None = None, parent_agent: str | None = None):
+        self.cfg, self.n, self.parent_agent = cfg, n or 1, parent_agent
+        self.store = Store(cfg.db_path)
+        self.oracle = make_oracle(cfg)
+        self.restarts = 0
+
+    def start(self) -> None:
+        self.store.upsert_agent(self.cfg.run_id, "inline-0", "worker", state="idle")
+        self.store.event(self.cfg.run_id, "pool_start", {"workers": 1, "inline": True},
+                         agent_id=self.parent_agent)
+
+    def supervise(self) -> list[dict]:
+        while (task := self.store.claim_task(self.cfg.run_id, "inline-0")) is not None:
+            run_task(self.store, self.oracle, self.cfg, "inline-0", task)
+        return []
+
+    def idle(self) -> bool:
+        self.supervise()
+        return True
+
+    def stop(self, timeout: float = 0.0) -> None:
+        self.store.set_agent_state("inline-0", "exited")
 
 
 class WorkerPool:

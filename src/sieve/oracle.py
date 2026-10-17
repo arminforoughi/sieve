@@ -1,4 +1,4 @@
-"""The oracle: the only module that runs simulations or reads labels.csv.
+"""The oracle: the only module that runs simulations or reads ground truth (labels.csv, arena truth).
 
 Three fidelity tiers behind one interface:
   tier 0  pymatgen parse -> descriptors + a RASPA-ready P1 CIF (proxy only, no simulation)
@@ -47,7 +47,10 @@ GRID_SPACING_A = 0.3  # IRMOF-1: 0.661 +/- 0.058 (0.3 A grid) vs 0.696 +/- 0.079
 GRID_CACHE_CAP_BYTES = int(float(os.environ.get("SIEVE_GRID_CACHE_GB", "1.0")) * 1e9)
 GRID_PIN_S = 900.0  # never evict a grid used in the last 15 minutes
 HEARTBEAT_S = 5.0
-TIMEOUT_FACTOR = 4.0  # CPU limit = 4x estimate (bounded by the tier's max)
+# CPU limit = TIMEOUT_FACTOR x estimate, at least TIMEOUT_FLOOR_S, at most the tier's max.
+# The env overrides exist for recovery demos (an aggressive 1.2x makes real timeouts happen).
+TIMEOUT_FACTOR = float(os.environ.get("SIEVE_TIMEOUT_FACTOR", "4.0"))
+TIMEOUT_FLOOR_S = float(os.environ.get("SIEVE_TIMEOUT_FLOOR_S", "30"))
 WALL_BACKSTOP = 6.0   # wall-clock kill only if a job is stuck, not merely slow
 CACHE_ROOT = Path(os.environ.get("SIEVE_CACHE", Path.home() / ".cache" / "sieve"))
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -540,7 +543,7 @@ class Oracle:
         """Default per-evaluation CPU limit: 4x the estimate within the tier's bounds, and never
         more than what is left (concurrent jobs can still overrun their estimates, so a run can
         end slightly over budget; the ledger reports it exactly)."""
-        limit = min(TIERS[tier].max_timeout_s, max(30.0, TIMEOUT_FACTOR * plan.est_cpu_s))
+        limit = min(TIERS[tier].max_timeout_s, max(TIMEOUT_FLOOR_S, TIMEOUT_FACTOR * plan.est_cpu_s))
         return max(1.0, min(limit, self.remaining()))
 
     # -- tier 0 -----------------------------------------------------------------------------
@@ -727,6 +730,114 @@ class Oracle:
             "best_found_over_best_label": max(labels[s] for s in scored[:k]) / best,
             "best_label_value": best,
         }
+
+
+# ------------------------------------------------------------------------------- replay oracle
+
+@dataclass(frozen=True)
+class NoiseModel:
+    """Measurement and cost noise, calibrated from real GCMC (sieve.calibrate_noise)."""
+    rel_sd: dict = field(default_factory=lambda: {1: 0.08, 2: 0.04})   # obs = truth * (1 + N(0, sd))
+    abs_floor: float = 0.01                                             # mol/kg, added in quadrature
+    reported_rel_err: dict = field(default_factory=lambda: {1: [0.07], 2: [0.035]})  # empirical draws
+    cost_log_sd: float = 0.2                                            # cpu = model cost * lognormal
+    source: str = "prior"
+
+
+class ReplayOracle(Oracle):
+    """The oracle with GCMC replaced by draws around arena ground truth. For seeds, not headlines.
+
+    Same interface, same ledger, same planning and cost model; every row it writes has
+    mode 'replay-direct' / 'replay-grid'. Measurements: truth x (1 + N(0, rel_sd[tier])); the
+    reported error is resampled from real RASPA errors at that tier; CPU charged is the cost
+    model's cost at the TRUE loading times calibrated lognormal noise, with timeouts when that
+    exceeds the CPU limit. Ground truth is read here and nowhere else.
+    """
+
+    def __init__(self, db_path, run_id: str, truth_db: str, noise: NoiseModel, seed: int,
+                 budget_cpu_s: float = DEFAULT_BUDGET_CPU_S, pool_cache: str | None = None,
+                 cost_model: CostModel | None = None):
+        import random
+
+        super().__init__(db_path, run_id, budget_cpu_s, labels_path=None)
+        con = sqlite3.connect(f"file:{truth_db}?mode=ro", uri=True)
+        self._truth = {s: (u, e) for s, u, e in con.execute("SELECT structure, uptake, err FROM truth")}
+        con.close()
+        self.noise = noise
+        self.true_cost = cost_model or CostModel()
+        self.rng = random.Random(f"{run_id}:{seed}")
+        self._pool = {}
+        with open(pool_cache or PROJECT_ROOT / "data" / "pool.jsonl") as f:
+            for line in f:
+                d = json.loads(line)
+                if d["structure"] in self._truth:
+                    self._pool[d["structure"]] = d
+        self._grids: set[str] = {r[0] for r in self.con.execute(
+            "SELECT DISTINCT structure FROM evaluations WHERE run_id=? AND mode='replay-grid' AND "
+            "status='ok'", (run_id,))}
+
+    def tier0(self, cif_path, worker_id=None) -> Descriptors:
+        name = Path(cif_path).stem
+        d = self._pool.get(name)
+        eval_id = self._reserve(name, 0, "describe", 0.05, None, worker_id)
+        if d is None:
+            desc = Descriptors(structure=name, parse_ok=False, error="not in arena")
+            self._finish(eval_id, "error", 0.0, 0.0, result=asdict(desc))
+            return desc
+        desc = Descriptors.from_dict(d)
+        self._finish(eval_id, "ok" if desc.parse_ok else "error", d.get("tier0_cpu_s", 0.03), 0.0,
+                     result=asdict(desc))
+        return desc
+
+    def plan(self, desc, tier, mode="auto", model=None, uptake_hint=None) -> Plan:
+        m = model or CostModel()
+        moves = m.moves(desc, tier, uptake_hint if uptake_hint is not None
+                        else self.known_uptake(desc.structure))
+        direct = m.direct_a + m.direct_k * moves * desc.n_atoms_sim
+        cached = desc.structure in self._grids
+        build = 0.0 if cached else (m.grid_g * self.grid_points(desc) * desc.n_atoms_sim
+                                    * len(forcefield.GRID_TYPES))
+        grid = build + m.grid_mc_a + m.grid_mc_k * moves
+        if mode == "auto":
+            mode = "grid" if grid < direct else "direct"
+        return Plan(mode, mode == "grid" and not cached, grid if mode == "grid" else direct,
+                    direct, grid)
+
+    def simulate(self, desc, tier, mode="auto", timeout_s=None, worker_id=None, cost_model=None,
+                 uptake_hint=None) -> Evaluation:
+        if not desc.parse_ok or desc.structure not in self._truth:
+            raise ValueError(f"{desc.structure}: not in the arena ground truth")
+        model = cost_model or CostModel()
+        if uptake_hint is None:
+            uptake_hint = self.known_uptake(desc.structure)
+        plan = self.plan(desc, tier, mode, model, uptake_hint)
+        if timeout_s is None:
+            timeout_s = self.cpu_limit(plan, tier)
+        mode_tag = f"replay-{plan.mode}"
+        eval_id = self._reserve(desc.structure, tier, mode_tag, plan.est_cpu_s, timeout_s, worker_id)
+        true_u, _ = self._truth[desc.structure]
+        actual = self.plan(desc, tier, plan.mode, self.true_cost, true_u).est_cpu_s
+        cpu = actual * math.exp(self.rng.gauss(0.0, self.noise.cost_log_sd))
+        meta = {"plan": asdict(plan), "replay": True, "noise": self.noise.source,
+                "n_atoms_sim": desc.n_atoms_sim, "uptake_hint": uptake_hint}
+        if cpu > timeout_s:
+            meta["phases"] = [{"kind": "makegrid" if plan.build_grid else f"mc_{plan.mode}",
+                               "status": "timeout", "killed_by": "cpu_limit", "cpu_s": timeout_s}]
+            self._finish(eval_id, "timeout", timeout_s, 0.0, result=meta)
+            self.con.execute("INSERT INTO timeouts VALUES (?,?,?,?,?,?,?,?)",
+                             (eval_id, self.run_id, desc.structure, tier, f"mc_{plan.mode}",
+                              timeout_s, desc.n_atoms_sim, time.time()))
+            return Evaluation(eval_id, desc.structure, tier, mode_tag, "timeout", None, None,
+                              timeout_s, 0.0, timeout_s, plan.est_cpu_s, meta)
+        sd = math.hypot(self.noise.rel_sd[tier] * true_u, self.noise.abs_floor)
+        obs = max(0.0, true_u + self.rng.gauss(0.0, sd))
+        err = max(1e-4, obs * self.rng.choice(self.noise.reported_rel_err[tier]))
+        if plan.mode == "grid":
+            self._grids.add(desc.structure)
+        meta["phases"] = [{"kind": f"mc_{plan.mode}", "status": "ok", "cpu_s": cpu}]
+        self._finish(eval_id, "ok", cpu, 0.0, obs, err, meta)
+        return Evaluation(eval_id, desc.structure, tier, mode_tag, "ok", obs, err, cpu, 0.0,
+                          timeout_s, plan.est_cpu_s, meta)
 
 
 # ------------------------------------------------------------------------------------- smoke

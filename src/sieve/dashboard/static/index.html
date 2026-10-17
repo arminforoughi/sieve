@@ -5,87 +5,84 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SIEVE Control Room</title>
 <link rel="stylesheet" href="/static/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
 </head>
 <body>
 <div class="app">
-  <header class="topbar">
-    <div class="brand">SIEVE</div>
-    <div class="subtitle">CO<sub>2</sub> uptake screen &middot; 298 K, 1 bar &middot; CoRE MOF 2019</div>
-    <div class="spacer"></div>
-    <div class="replay" id="replay" hidden>REPLAY <span id="replay-speed"></span></div>
-    <label class="runpick"><span class="label">Run</span>
-      <select id="run-select" aria-label="Run"></select>
-    </label>
+  <header class="hero">
+    <div class="hero-main" aria-label="Human interventions">
+      <div class="hero-num mono" id="h-int">0</div>
+      <div class="hero-label">human<br>interventions</div>
+    </div>
+    <div class="strip" aria-label="Run vitals">
+      <div class="kv"><span class="k">Elapsed</span><span class="v mono" id="s-elapsed">00:00:00</span></div>
+      <div class="kv"><span class="k">Budget <em>CPU-h</em></span>
+        <span class="v mono"><span id="s-spent">0.00</span><span class="dim"> / <span id="s-budget">4.00</span></span></span>
+        <span class="bar"><i id="s-bar"></i><b id="s-inflight"></b></span></div>
+      <div class="kv"><span class="k">Structures <em>tier 0 / 1 / 2</em></span><span class="v mono" id="s-counts">0 / 0 / 0</span></div>
+      <div class="kv"><span class="k">Timeouts recovered</span><span class="v mono" id="s-timeouts">0</span></div>
+      <div class="kv wide"><span class="k">Best uptake <em>mol/kg</em></span>
+        <span class="v mono"><span id="s-best">&ndash;</span> <span class="chip" id="s-best-chip"></span></span>
+        <span class="sub" id="s-best-sub">&nbsp;</span></div>
+    </div>
+    <div class="runbox">
+      <div class="brand">SIEVE <span>CO<sub>2</sub> at 298 K, 1 bar &middot; CoRE MOF 2019</span></div>
+      <div class="runrow">
+        <span class="badge" id="replay" hidden>REPLAY 20&times;</span>
+        <select id="run-select" aria-label="Run"></select>
+      </div>
+    </div>
   </header>
 
-  <section class="panel vitals" aria-label="Run vitals">
-    <div class="plabel">Run vitals</div>
-    <div class="readout">
-      <div class="rlabel">Elapsed</div>
-      <div class="rvalue mono" id="v-elapsed">00:00:00</div>
+  <div class="banner" id="stale" hidden></div>
+
+  <section class="panel stage" aria-label="Current best structure">
+    <div class="plabel">Current best structure</div>
+    <canvas id="mol" class="mol"></canvas>
+    <div class="mol-info">
+      <div class="mol-name mono" id="m-name">&nbsp;</div>
+      <div class="mol-meta" id="m-meta">&nbsp;</div>
     </div>
-    <div class="readout">
-      <div class="rlabel">Compute budget <span class="unit">CPU-h</span></div>
-      <div class="rvalue mono"><span id="v-spent">0.00</span><span class="dim"> / <span id="v-budget">4.00</span></span></div>
-      <div class="bar"><div class="bar-fill" id="v-budget-bar"></div><div class="bar-inflight" id="v-inflight-bar"></div></div>
-    </div>
-    <div class="readout hero">
-      <div class="rlabel">Human interventions</div>
-      <div class="rvalue mono hero-value" id="v-interventions">0</div>
-    </div>
-    <div class="readout">
-      <div class="rlabel">Best CO<sub>2</sub> uptake <span class="unit">mol/kg</span></div>
-      <div class="rvalue mono"><span id="v-best">&ndash;</span><span class="tierchip" id="v-best-tier"></span></div>
-      <div class="rnote" id="v-best-name">&nbsp;</div>
-      <svg class="spark" id="v-spark" viewBox="0 0 280 40" preserveAspectRatio="none" aria-hidden="true"></svg>
-      <div class="rnote" id="v-best-t2">&nbsp;</div>
-    </div>
-    <div class="readout">
-      <div class="rlabel">Structures evaluated <span class="unit">tier 0 / 1 / 2</span></div>
-      <div class="rvalue mono small" id="v-counts">0 / 0 / 0</div>
-    </div>
-    <div class="readout pair">
-      <div>
-        <div class="rlabel">Timeouts recovered</div>
-        <div class="rvalue mono small" id="v-timeouts">0</div>
-      </div>
-      <div>
-        <div class="rlabel">Model spend</div>
-        <div class="rvalue mono small" id="v-spend">$0.00</div>
-      </div>
-      <div class="rnote span" id="v-recovery">&nbsp;</div>
-      <div class="rnote mono span" id="v-spend-split">&nbsp;</div>
+    <div class="mol-hint">drag to orbit</div>
+    <div class="empty center-msg" id="m-empty">No structure measured yet.</div>
+  </section>
+
+  <section class="panel scatter" aria-label="Candidate pool">
+    <div class="plabel">Candidate pool <span class="dim" id="p-count"></span></div>
+    <div class="scatter-legend" id="p-legend"></div>
+    <div class="scatter-plot" id="p-plot">
+      <canvas id="p-canvas"></canvas>
+      <svg id="p-axes"></svg>
+      <div class="tip mono" id="p-tip" hidden></div>
     </div>
   </section>
 
-  <section class="panel center" aria-label="Agents and workers">
-    <div class="tree-wrap">
-      <div class="plabel">Agent tree</div>
-      <svg id="tree" class="tree" viewBox="0 0 800 300" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Agent tree"></svg>
-    </div>
-    <div class="pool-wrap">
-      <div class="plabel">Worker pool <span class="dim" id="pool-note"></span></div>
-      <div class="pool" id="pool"></div>
-    </div>
+  <section class="panel workers" aria-label="Worker pool">
+    <div class="plabel">Worker pool <span class="dim" id="w-note"></span></div>
+    <div class="slots" id="slots"></div>
+  </section>
+
+  <section class="panel agents" aria-label="Agents">
+    <div class="plabel">Agents</div>
+    <ol class="agent-rows" id="agents"></ol>
+  </section>
+
+  <section class="panel progress" aria-label="Progress">
+    <div class="plabel">Best uptake found vs CPU-hours spent</div>
+    <div class="legend" id="c-legend"></div>
+    <div class="chart" id="c-chart"><svg id="c-svg"></svg><div class="tip mono" id="c-tip" hidden></div></div>
   </section>
 
   <section class="panel stream" aria-label="Event stream">
     <div class="plabel">Event stream</div>
-    <div class="filters" role="tablist">
+    <div class="filters">
       <button data-f="all" class="on">all</button>
       <button data-f="timeouts">timeouts</button>
       <button data-f="vetoes">vetoes</button>
       <button data-f="decisions">decisions</button>
     </div>
-    <div class="empty" id="events-empty">No events yet.</div>
+    <div class="empty" id="e-empty">No events yet.</div>
     <ol class="events mono" id="events" aria-live="polite"></ol>
-  </section>
-
-  <section class="panel curve" aria-label="Progress curve">
-    <div class="plabel">Best uptake found vs compute spent</div>
-    <div class="legend" id="legend"></div>
-    <svg id="curve" class="curve-svg" preserveAspectRatio="none" role="img" aria-label="Progress curve"></svg>
-    <div class="tip mono" id="tip" hidden></div>
   </section>
 </div>
 <script src="/static/app.js"></script>
