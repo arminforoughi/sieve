@@ -215,6 +215,7 @@ const workers = {
     }
   },
   target(w) {
+    if (w.state === "running" && w.stalled_s) return { task: `${w.task}-stalled`, kind: "stalled", w };
     if (w.state === "running") return { task: w.task, kind: "running", w };
     if (w.state === "dead") return { task: `dead-${w.ended}`, kind: "dead", w };
     if (w.state === "timeout") return { task: w.task, kind: "killed", w };
@@ -248,6 +249,11 @@ const workers = {
       stEl.textContent = "TIMEOUT";
       nm.textContent = name(w.structure || w.last_structure);
       meta.textContent = `killed at ${secs(w.limit_cpu_s)} CPU`;
+    } else if (want.kind === "stalled") {
+      stEl.textContent = "NO HEARTBEAT";
+      nm.textContent = name(w.structure);
+      meta.textContent = `silent ${Math.round(w.stalled_s / 60) || "<1"} min · in-flight, re-queued on resume`;
+      bar.style.width = "0%";
     } else if (want.kind === "dead") {
       stEl.textContent = "DEAD"; nm.textContent = "worker died"; meta.textContent = "restarting…";
     } else {

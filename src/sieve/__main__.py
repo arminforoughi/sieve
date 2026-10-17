@@ -39,7 +39,10 @@ def cmd_resume(a) -> None:
     from sieve.baselines import ARMS, run_arm
     from sieve.store import Store
 
-    arm = Store(a.db).run(a.run_id)["arm"]
+    st = Store(a.db)
+    arm = st.run(a.run_id)["arm"]
+    if not a.auto:  # a person typed this: that is an intervention, and the dashboard counts it
+        st.event(a.run_id, "intervention", {"text": "manual resume from the command line"})
     if arm in ARMS:
         run_arm(arm, a.db, run_id=a.run_id)
     else:
@@ -91,6 +94,7 @@ def main() -> None:
     b.set_defaults(fn=cmd_baseline)
     r = sub.add_parser("resume")
     r.add_argument("run_id")
+    r.add_argument("--auto", action="store_true", help="issued by a supervisor, not a person")
     r.set_defaults(fn=cmd_resume)
     s = sub.add_parser("status")
     s.add_argument("run_id", nargs="?")

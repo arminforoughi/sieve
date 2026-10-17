@@ -155,8 +155,11 @@ def frame(db: str, run_id: str | None, T: float) -> dict:
         if r["finished_at"]:
             frac = (T - r["started_at"]) / max(1e-6, r["finished_at"] - r["started_at"])
             cpu_now = (r["cpu_s"] or 0.0) * min(1.0, frac)
-        else:
-            cpu_now = (r["heartbeat_cpu_s"] or 0.0) + 0.6 * max(0.0, T - (r["heartbeat_at"] or T))
+        else:  # live: extrapolate a little past the last heartbeat (every 5 s), never further
+            since = max(0.0, T - (r["heartbeat_at"] or r["started_at"]))
+            cpu_now = (r["heartbeat_cpu_s"] or 0.0) + 0.6 * min(since, 10.0)
+            if since > 15.0:
+                workers[slot]["stalled_s"] = round(since)
         workers[slot].update(cpu_now=round(cpu_now, 1), limit_cpu_s=r["timeout_s"])
     out["workers"] = sorted(workers.values(), key=lambda w: int(w["slot"].split("-")[-1])
                             if w["slot"].split("-")[-1].isdigit() else 99)
@@ -212,8 +215,17 @@ def frame(db: str, run_id: str | None, T: float) -> dict:
             "worker" if aid.startswith("worker") else aid)
         row["model"] = next((a["model"] for a in agents.values() if a["agent_id"] == aid), None)
     out["agent_rows"] = sorted(rows.values(), key=_agent_order)
+    # liveness = latest event OR latest heartbeat of a running job (a long tier-2 job can be
+    # quiet in the event log for minutes while its heartbeat says it is fine)
     last_ev = q("SELECT MAX(ts) FROM events WHERE run_id=? AND ts<=?", T).fetchone()[0]
-    out["stale_s"] = None if (t_end or last_ev is None) else T - last_ev
+    last_hb = q("SELECT MAX(heartbeat_at) FROM evaluations WHERE run_id=? AND status='running' "
+                "AND heartbeat_at<=?", T).fetchone()[0]
+    alive = max(x for x in (last_ev, last_hb, 0) if x is not None)
+    out["stale_s"] = None if (t_end or not alive) else T - alive
+    if out["stale_s"] and out["stale_s"] > 60:
+        for row in out["agent_rows"]:
+            if row["state"] == "working":
+                row["state"] = "failed"
 
     curves = {}
     for arm in ARMS:
@@ -345,13 +357,15 @@ def create_app(db: str, replay_run: str | None = None) -> FastAPI:
     import threading
     threading.Thread(target=_prewarm, daemon=True).start()
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
-    replay = {"run": replay_run, "t0": time.time(), "ts0": None}
+    replay = {"run": replay_run, "t0": None, "ts0": None}  # the clock starts with the first viewer
 
     def clock(run_id: str | None) -> float:
         if replay["run"] and run_id == replay["run"]:
             if replay["ts0"] is None:
                 r = [x for x in list_runs(db) if x["run_id"] == run_id]
                 replay["ts0"] = r[0]["created_at"] if r else time.time()
+            if replay["t0"] is None:
+                replay["t0"] = time.time()
             return replay["ts0"] + (time.time() - replay["t0"]) * REPLAY_SPEED
         return time.time()
 

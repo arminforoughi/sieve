@@ -17,6 +17,7 @@ arms report tier-1 winners, which is exactly the failure mode SIEVE is built to 
 from __future__ import annotations
 
 import math
+import os
 import random
 import time
 
@@ -76,15 +77,19 @@ def run_arm(arm: str, db_path: str, budget_cpu_s: float = 4 * 3600.0, n_workers:
     if run_id and st.con.execute("SELECT 1 FROM runs WHERE run_id=?", (run_id,)).fetchone():
         state = resume(db_path, run_id)
         budget_cpu_s, seed = state.budget_cpu_s, state.config["seed"]
+        n_workers = state.config.get("n_workers") or n_workers
         cost_model = CostModel(**state.config["cost_model"])
         limit = state.config.get("limit")
         candidates = state.config.get("candidates")
         replay = state.config.get("replay")
+        for k, v in (state.config.get("env") or {}).items():  # e.g. demo CPU-limit knobs
+            os.environ[k] = v
     else:
         cost_model = cost_model or CostModel()
         run_id = st.create_run(arm, budget_cpu_s, {
             "seed": seed, "n_workers": n_workers, "limit": limit, "candidates": candidates,
             "replay": replay, "cost_model": cost_model.__dict__,
+            "env": {k: v for k, v in os.environ.items() if k.startswith("SIEVE_TIMEOUT")},
             "pool": "arena" if candidates else "CoRE-2019-ASR, PLD >= 3.3 A"}, run_id)
 
     if candidates:
