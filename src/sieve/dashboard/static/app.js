@@ -73,7 +73,7 @@ const VERBS = {
   agent_tool: ["tool", ""], intervention: ["HUMAN", "bad"],
 };
 const FILTERS = {
-  all: () => true,
+  all: (e) => e.type !== "task_start" && e.type !== "worker_start",  // starts are visible in the worker strip
   timeouts: (e) => e.type === "timeout" || e.type === "worker_dead",
   vetoes: (e) => e.type === "veto",
   decisions: (e) => ["decision", "veto", "promote", "recommend", "round_end"].includes(e.type),
@@ -91,20 +91,27 @@ async function boot() {
   for (const r of cfg.runs) sel.appendChild(new Option(`${r.run_id} · ${r.arm}`, r.run_id, false, r.run_id === want));
   sel.onchange = () => { params.set("run", sel.value); location.search = params.toString(); };
   S.run = want || null;
+  render({ run: null, curves: {} });
   document.querySelectorAll(".filters button").forEach((b) => (b.onclick = () => {
     document.querySelectorAll(".filters button").forEach((x) => x.classList.toggle("on", x === b));
     S.filter = b.dataset.f; renderEvents(true);
   }));
-  mol.init($("mol"));
+  mol.init();
   pool.init();
   fetch("/api/pool").then((r) => r.json()).then((d) => pool.setPoints(d)).catch(() => {});
-  const es = new EventSource(`/api/stream?run=${encodeURIComponent(S.run || "")}`);
-  es.addEventListener("frame", (m) => { S.frame = JSON.parse(m.data); S.frameAt = performance.now(); render(S.frame); });
-  es.addEventListener("events", (m) => addEvents(JSON.parse(m.data)));
+  if (params.get("snapshot")) {  // one-shot render over plain HTTP: static exports, headless screenshots
+    const q = encodeURIComponent(S.run || "");
+    S.frame = await fetch(`/api/frame?run=${q}`).then((r) => r.json()); S.frameAt = performance.now();
+    if (S.run) addEvents(await fetch(`/api/events?run=${q}`).then((r) => r.json()));
+    render(S.frame);
+  } else {
+    const es = new EventSource(`/api/stream?run=${encodeURIComponent(S.run || "")}`);
+    es.addEventListener("frame", (m) => { S.frame = JSON.parse(m.data); S.frameAt = performance.now(); render(S.frame); });
+    es.addEventListener("events", (m) => addEvents(JSON.parse(m.data)));
+  }
   setInterval(tick, 250);
   window.addEventListener("resize", () => { if (S.frame) chart.draw(S.frame); pool.resize(); });
   requestAnimationFrame(loop);
-  render({ run: null, curves: {} });
 }
 
 function loop(now) {
@@ -135,8 +142,15 @@ function render(f) {
 }
 
 // --------------------------------------------------------------------------------------- hero
+const POLICY = {
+  random: "Random arm — a fixed policy: tier 1 on structures in random order until the budget runs out.",
+  descriptor: "Descriptor arm — a fixed policy: rank every structure by pore geometry, then tier 1 from the top down.",
+  uniform: "Uniform arm — a fixed policy: tier 2 (converged) on structures in random order until the budget runs out.",
+  sieve: "SIEVE — agents choose each round which structures to screen, promote to tier 2, or veto.",
+};
 function renderHero(f) {
   const v = f.vitals, r = f.run;
+  $("headline").textContent = r ? `${POLICY[r.arm] || r.arm}  Budget ${f2(r.budget_cpu_s / 3600)} CPU-h; ranking CO₂ uptake, not predicting it.` : "No run selected.";
   if (!r || !v) return;
   $("h-int").textContent = v.interventions;
   $("s-spent").textContent = f2(v.spent_cpu_s / 3600);
@@ -264,111 +278,68 @@ const workers = {
 };
 
 // -------------------------------------------------------------------------------- 3D structure
+// 3Dmol.js renders the actual framework from the same P1 CIF the simulation used: ball-and-stick,
+// Jmol element colours, unit-cell box, pore void as faint accent spheres. Two viewers cross-fade.
+const JMOL = { H: "#FFFFFF", C: "#909090", N: "#3050F8", O: "#FF0D0D", F: "#90E050", S: "#FFFF30", Cl: "#1FF01F",
+  Br: "#A62929", P: "#FF8000", Zn: "#7D80B0", Cu: "#C88033", Co: "#F090A0", Ni: "#50D050", Fe: "#E06633",
+  Mn: "#9C7AC7", Mg: "#8AFF00", Zr: "#94E0E0", Cd: "#FFD98F", Al: "#BFA6A6", Ag: "#C0C0C0" };
 const mol = {
-  cache: {}, cur: null, prev: null, fadeAt: 0, want: null, shownAt: -1e9, loading: false,
-  yaw: 0.6, pitch: -0.35, drag: null, touched: -1e9, styles: [],
-  init(canvas) {
-    this.cv = canvas; this.ctx = canvas.getContext("2d");
-    for (let i = 0; i <= 20; i++) {  // depth-quantized fills: far = light grey, near = ink
-      const c = Math.round(205 - 175 * (i / 20));
-      this.styles.push(`rgb(${c},${c + 3},${c + 8})`);
+  views: [], active: 0, curName: null, want: null, shownAt: -1e9, loading: false,
+  init() {
+    if (!window.$3Dmol) { $("m-empty").textContent = "3D viewer unavailable (3Dmol.js did not load)."; return; }
+    try {  // no WebGL (some projector laptops, headless) must not take the rest of the page down
+      for (const id of ["mv-a", "mv-b"]) this.views.push($3Dmol.createViewer($(id), { backgroundColor: "white", antialias: true }));
+    } catch (e) {
+      this.views = [];
+      $("m-empty").textContent = "3D view needs WebGL, which this browser does not provide.";
     }
-    canvas.addEventListener("pointerdown", (e) => { this.drag = { x: e.clientX, y: e.clientY }; canvas.setPointerCapture(e.pointerId); });
-    canvas.addEventListener("pointermove", (e) => {
-      if (!this.drag) return;
-      this.yaw += (e.clientX - this.drag.x) * 0.008;
-      this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch + (e.clientY - this.drag.y) * 0.008));
-      this.drag = { x: e.clientX, y: e.clientY }; this.touched = performance.now();
-    });
-    canvas.addEventListener("pointerup", () => { this.drag = null; this.touched = performance.now(); });
   },
   update(f) {
     const v = f.vitals;
     const b = v && (v.best_t2 ? { ...v.best_t2, tier: 2 } : v.best);
-    $("m-empty").hidden = !!this.cur;
+    $("m-empty").hidden = !!this.curName;
     $("m-empty").textContent = b ? `Loading ${name(b.structure)}…` : f.run ? "No structure measured yet." : "Select a run.";
     if (!b) return;
     this.want = b;
-    if (this.cur && this.cur.name === b.structure) this.label(b);
+    if (this.curName === b.structure) this.label(b);
+    this.maybeSwitch();
   },
   async maybeSwitch() {
     const b = this.want, now = performance.now();
-    if (!b || (this.cur && this.cur.name === b.structure)) return;
-    if (now - this.shownAt < BEST_DWELL_MS || this.loading) return;  // debounce: no strobing in replay
+    if (!b || !this.views.length || this.curName === b.structure) return;
+    if (now - this.shownAt < BEST_DWELL_MS || this.loading) { setTimeout(() => this.maybeSwitch(), 500); return; }
     this.loading = true;
     try {
-      let P = this.cache[b.structure];
-      if (!P) P = this.cache[b.structure] = await fetch(`/api/structure?name=${encodeURIComponent(b.structure)}`).then((r) => r.json());
+      const P = await fetch(`/api/cif?name=${encodeURIComponent(b.structure)}`).then((r) => r.json());
       if (P.error) return;
-      this.prev = this.cur; this.cur = P; this.fadeAt = performance.now(); this.shownAt = this.fadeAt;
-      this.label(b);
+      const next = 1 - this.active, v = this.views[next];
+      v.clear(); v.removeAllShapes();
+      const m = v.addModel(P.cif, "cif", { doAssembly: true, duplicateAssemblyAtoms: true, normalizeAssembly: true });
+      if (P.reps > 1 && v.replicateUnitCell) v.replicateUnitCell(P.reps, P.reps, P.reps, m, true);
+      v.setStyle({}, { stick: { radius: 0.14, colorscheme: "Jmol" }, sphere: { scale: 0.24, colorscheme: "Jmol" } });
+      v.setStyle({ elem: "H" }, { stick: { radius: 0.08, colorscheme: "Jmol" }, sphere: { scale: 0.12, colorscheme: "Jmol" } });
+      v.addUnitCell(m, { box: { color: "#9097A3" }, alabel: "", blabel: "", clabel: "" });
+      const L = P.lattice, R = P.reps;
+      for (let a = 0; a < R; a++) for (let bb = 0; bb < R; bb++) for (let c = 0; c < R; c++)
+        for (const p of P.void) v.addSphere({ center: { x: p[0] + a * L[0][0] + bb * L[1][0] + c * L[2][0],
+          y: p[1] + a * L[0][1] + bb * L[1][1] + c * L[2][1], z: p[2] + a * L[0][2] + bb * L[1][2] + c * L[2][2] },
+          radius: 0.9, color: ACCENT, opacity: 0.12 });
+      v.resize(); v.zoomTo(); v.zoom(1.05); v.render(); if (!params.get("snapshot")) v.spin("y", 0.4);
+      $(next ? "mv-b" : "mv-a").classList.add("on");
+      $(next ? "mv-a" : "mv-b").classList.remove("on");
+      this.views[this.active].spin(false);
+      this.active = next; this.curName = P.name; this.shownAt = performance.now(); this.cell = P;
       $("m-empty").hidden = true;
-    } catch (_) { /* retry on next frame */ } finally { this.loading = false; }
+      $("m-legend").innerHTML = P.elements.filter((e) => JMOL[e]).map((e) => `<span class="el" style="background:${JMOL[e]};border:1px solid #C9CED6"></span>${e}`).join("");
+      this.label(this.want && this.want.structure === P.name ? this.want : b);
+    } catch (_) { /* retry on the next frame */ } finally { this.loading = false; }
   },
   label(b) {
     $("m-name").textContent = name(b.structure);
     $("m-meta").textContent = `${f3(b.uptake_molkg)} ± ${f3(b.uptake_err)} mol/kg · ${b.tier === 2 ? "tier-2 confirmed" : "tier 1, not converged (±18%)"}`
-      + (this.cur ? ` · ${this.cur.n_cell} atoms/cell · ${this.cur.elements.join(" ")}` : "");
+      + (this.cell ? ` · ${this.cell.n_cell} atoms/cell${this.cell.reps > 1 ? `, ${this.cell.reps}×${this.cell.reps}×${this.cell.reps} cells shown` : ""}` : "");
   },
-  draw(now) {
-    const cv = this.cv, dpr = window.devicePixelRatio || 1;
-    const W = cv.clientWidth, H = cv.clientHeight;
-    if (!W || !H) return;
-    if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
-    const ctx = this.ctx;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, W, H);
-    if (!this.drag && now - this.touched > 2500) this.yaw += 0.0022;  // slow idle rotation
-    if (this.want && (!this.cur || this.cur.name !== this.want.structure)) this.maybeSwitch();
-    const k = this.cur ? Math.min(1, (now - this.fadeAt) / 600) : 0;  // 600 ms cross-fade
-    if (this.prev && k < 1) this.paint(ctx, this.prev, W, H, 1 - k);
-    if (this.cur) this.paint(ctx, this.cur, W, H, k);
-  },
-  paint(ctx, P, W, H, alpha) {
-    if (alpha <= 0.001) return;
-    const cy = Math.cos(this.yaw), sy = Math.sin(this.yaw), cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
-    const R = P.radius || 10, scale = (Math.min(W, H) * 0.42) / R, D = R * 3.4;
-    const cx0 = W / 2, cy0 = H / 2 + 8;
-    const items = [];
-    const push = (x, y, z, kind) => {
-      const x1 = x * cy - z * sy, z1 = x * sy + z * cy;
-      const y1 = y * cp - z1 * sp, z2 = y * sp + z1 * cp;
-      const ps = D / (D - z2);
-      items.push([z2, cx0 + x1 * scale * ps, cy0 - y1 * scale * ps, ps, kind]);
-    };
-    for (const v of P.void) push(v[0], v[1], v[2], 2);
-    const n0i = items.length;
-    for (const a of P.atoms) push(a[0], a[1], a[2], a[4]);
-    for (const [i, j] of P.bonds || []) {  // bonds sorted at their midpoint depth
-      const a = items[n0i + i], b = items[n0i + j];
-      items.push([(a[0] + b[0]) / 2 - 0.01, a[1], a[2], b[1], 4, b[2]]);
-    }
-    items.sort((a, b) => a[0] - b[0]);  // painter's order: far first
-    const base = Math.max(1.0, 0.32 * scale);  // atom radius in Angstrom, through the projection
-    ctx.lineCap = "round";
-    for (const it of items) {
-      const [z, px, py, ps, kind] = it;
-      const t = Math.max(0, Math.min(1, (z + R) / (2 * R)));
-      if (kind === 4) {
-        ctx.globalAlpha = alpha * (0.12 + 0.4 * t);
-        ctx.strokeStyle = this.styles[Math.round(t * 20)];
-        ctx.lineWidth = Math.max(0.6, 0.12 * scale) * (0.6 + 0.6 * t);
-        ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(ps, it[5]); ctx.stroke();
-        continue;
-      }
-      if (kind === 2) {  // pore void, accent-tinted
-        ctx.globalAlpha = alpha * (0.05 + 0.11 * t);
-        ctx.fillStyle = ACCENT;
-        ctx.beginPath(); ctx.arc(px, py, base * 1.3 * ps, 0, 6.283); ctx.fill();
-        continue;
-      }
-      ctx.globalAlpha = alpha * (0.35 + 0.65 * t);
-      ctx.fillStyle = this.styles[Math.round(t * 20)];
-      const r = (kind === 1 ? base * 1.9 : kind === 3 ? base * 0.55 : base) * ps * (0.7 + 0.5 * t);  // size and brightness by z
-      ctx.beginPath(); ctx.arc(px, py, r, 0, 6.283); ctx.fill();
-    }
-    ctx.globalAlpha = 1;
-  },
+  draw() {},
 };
 
 // ------------------------------------------------------------------------------- pool scatter
@@ -439,7 +410,7 @@ const pool = {
   renderLegend(top) {
     if (this.legendTop === top) return;
     this.legendTop = top;
-    $("p-legend").innerHTML = `<span><span class="dot"></span>not measured</span><span>0</span><span class="ramp" style="background:linear-gradient(90deg,#BFE5EA,#05505A)"></span><span>${top.toFixed(1)} mol/kg</span>`;
+    $("p-legend").innerHTML = `<span><span class="dot"></span>not measured</span><span><span class="dot" style="background:#fff;box-shadow:inset 0 0 0 1.5px #15171C"></span>tier-2 confirmed</span><span>0</span><span class="ramp" style="background:linear-gradient(90deg,#BFE5EA,#05505A)"></span><span>${top.toFixed(1)} mol/kg</span>`;
   },
   draw(now) {
     if (!this.x || !this.pts.length) return;
@@ -460,7 +431,7 @@ const pool = {
       const r = 1.5 + 2.6 * (1 - Math.pow(1 - g, 3)) + (m[2] === 2 ? 0.8 : 0);
       ctx.fillStyle = this.color ? this.color(m[0]) : ACCENT;
       ctx.beginPath(); ctx.arc(p.px, p.py, r, 0, 6.283); ctx.fill();
-      ctx.lineWidth = 1.5; ctx.strokeStyle = "#FFFFFF"; ctx.stroke();
+      ctx.lineWidth = 1.5; ctx.strokeStyle = m[2] === 2 ? "#15171C" : "#FFFFFF"; ctx.stroke();
     }
     // the last round's picks: a comet trail, head = most recent pick, fading out
     if (this.trail && this.trail.picks.length) {
@@ -499,6 +470,9 @@ const chart = {
     const curves = f.curves || {};
     const present = ARMS.filter((a) => curves[a.key] && curves[a.key].points.length);
     const all = present.flatMap((a) => curves[a.key].points);
+    const labelsFit = (() => { const ys = present.map((a) => curves[a.key].points.at(-1)[1]).sort((p, q) => p - q);
+      const span = (d3.max(all, (p) => p[1]) || 1) * 1.08; return ys.every((v, i) => !i || (v - ys[i - 1]) / span * (H - 38) >= 13); })();
+    if (!labelsFit) m.r = 20;
     const budgetH = f.run ? f.run.budget_cpu_s / 3600 : 4;
     const x1 = Math.max(budgetH, d3.max(all, (p) => p[0]) || 0);
     let y1 = Math.max(0.5, d3.max(all, (p) => p[1]) || 0);
@@ -561,7 +535,7 @@ function line(e) {
   if (kind) li.className = `k-${kind}`;
   li.innerHTML = `<span class="t"></span><span class="who"></span><span class="verb"></span><span class="msg"></span>`;
   li.children[0].textContent = clock(e.ts);
-  li.children[1].textContent = short(who(e), 11);
+  li.children[1].textContent = short(who(e), 14);
   li.children[2].textContent = verb;
   const text = sentence(e);
   li.children[3].textContent = text; li.title = text;

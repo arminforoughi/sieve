@@ -116,9 +116,11 @@ def frame(db: str, run_id: str | None, T: float) -> dict:
 
     # worker slots: the latest task_start per worker, and whether it has finished by T
     workers = {}
-    for r in q("SELECT agent_id, ts, type, payload_json FROM events WHERE run_id=? AND ts<=? AND "
+    # only recent history matters for the slots (a job never outlives its 15-min CPU cap by much)
+    for r in q("SELECT agent_id, ts, type, payload_json FROM events WHERE run_id=? AND ts<=? AND ts>? AND "
                "type IN ('worker_start','task_start','task_done','timeout','task_error',"
-               "'budget_refused','worker_dead','worker_restart') ORDER BY event_id", T):
+               "'budget_refused','worker_dead','worker_restart') ORDER BY event_id", T,
+               (q("SELECT MAX(ts) FROM events WHERE run_id=? AND ts<=?", T).fetchone()[0] or T) - 1800):
         p = json.loads(r["payload_json"])
         wid = r["agent_id"]
         slot = wid.split(".")[0] if wid else None
@@ -144,6 +146,10 @@ def frame(db: str, run_id: str | None, T: float) -> dict:
             w.setdefault("state", "idle")
             if r["type"] == "worker_restart":
                 w.update(state="idle", restarted=r["ts"])
+    if t_end:  # a finished run has no live failures: old timeouts are history, not alarms
+        for w in workers.values():
+            if w.get("state") in ("timeout", "running", "dead"):
+                w["state"] = "idle"
     # CPU progress of each running job: live from heartbeats, in replay by interpolating the
     # job's final CPU over its wall time (the limit is CPU time, so the bar must be too)
     for r in q("SELECT worker_id, started_at, finished_at, cpu_s, heartbeat_at, heartbeat_cpu_s, "
@@ -214,7 +220,8 @@ def frame(db: str, run_id: str | None, T: float) -> dict:
         row["role"] = next((a["role"] for a in agents.values() if a["agent_id"] == aid), None) or (
             "worker" if aid.startswith("worker") else aid)
         row["model"] = next((a["model"] for a in agents.values() if a["agent_id"] == aid), None)
-    out["agent_rows"] = sorted(rows.values(), key=_agent_order)
+    out["agent_rows"] = sorted((r for r in rows.values() if not r["agent"].startswith(("worker", "inline"))),
+                               key=_agent_order)
     # liveness = latest event OR latest heartbeat of a running job (a long tier-2 job can be
     # quiet in the event log for minutes while its heartbeat says it is fine)
     last_ev = q("SELECT MAX(ts) FROM events WHERE run_id=? AND ts<=?", T).fetchone()[0]
@@ -333,6 +340,37 @@ def structure_payload(name: str) -> dict:
     }
 
 
+@lru_cache(maxsize=48)
+def cif_payload(name: str) -> dict:
+    """The P1 CIF the simulation used, plus pore-void sample points in the same unit cell."""
+    import warnings
+
+    import numpy as np
+    from pymatgen.core import Structure
+
+    from sieve.oracle import PROJECT_ROOT, bundled_cif_dir, raspa_alias
+
+    path = PROJECT_ROOT / "data" / "prepared" / f"{raspa_alias(name)}.cif"
+    for cand in (path, PROJECT_ROOT / "data" / "cifs" / f"{name}.cif", bundled_cif_dir() / f"{name}.cif"):
+        if cand.exists():
+            path = cand
+            break
+    else:
+        return {"name": name, "error": "structure file not found"}
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        s = Structure.from_file(str(path))
+    rng = np.random.default_rng(0)
+    trial = rng.random((1500, 3))
+    d = s.lattice.get_all_distances(trial, s.frac_coords).min(axis=1)
+    void = s.lattice.get_cartesian_coords(trial[d > 3.2][:250]) if (d > 3.2).any() else np.zeros((0, 3))
+    reps = 2 if len(s) <= 300 else 1
+    return {"name": name, "cif": path.read_text(), "n_cell": len(s), "reps": reps,
+            "elements": sorted({x.specie.symbol for x in s}),
+            "lattice": [[round(float(v), 4) for v in row] for row in s.lattice.matrix],
+            "void": [[round(float(v), 2) for v in p] for p in void]}
+
+
 def events_after(db: str, run_id: str, after: int, T: float, limit: int = 500) -> list[dict]:
     con = _con(db)
     if not _has(con, "events"):
@@ -357,6 +395,13 @@ def create_app(db: str, replay_run: str | None = None) -> FastAPI:
     import threading
     threading.Thread(target=_prewarm, daemon=True).start()
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
+
+    @app.middleware("http")
+    async def no_cache(request, call_next):  # a demo machine must never run a stale app.js
+        resp = await call_next(request)
+        if request.url.path == "/" or request.url.path.startswith("/static"):
+            resp.headers["Cache-Control"] = "no-cache"
+        return resp
     replay = {"run": replay_run, "t0": None, "ts0": None}  # the clock starts with the first viewer
 
     def clock(run_id: str | None) -> float:
@@ -371,7 +416,12 @@ def create_app(db: str, replay_run: str | None = None) -> FastAPI:
 
     @app.get("/")
     def index():
-        return FileResponse(STATIC / "index.html")
+        from fastapi.responses import HTMLResponse
+
+        html = (STATIC / "index.html").read_text()
+        for asset in ("app.js", "style.css"):  # version by mtime: never a stale asset
+            html = html.replace(f"/static/{asset}", f"/static/{asset}?v={int((STATIC / asset).stat().st_mtime)}")
+        return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
     @app.get("/api/config")
     def config():
@@ -387,6 +437,16 @@ def create_app(db: str, replay_run: str | None = None) -> FastAPI:
     @app.get("/api/structure")
     def api_structure(name: str):
         return structure_payload(name)
+
+    @app.get("/api/events")
+    def api_events(run: str, limit: int = 300):
+        T = clock(run)
+        evs = events_after(db, run, 0, T, 100000)
+        return evs[-limit:]
+
+    @app.get("/api/cif")
+    def api_cif(name: str):
+        return cif_payload(name)
 
     @app.get("/api/frame")
     def api_frame(run: str | None = None):

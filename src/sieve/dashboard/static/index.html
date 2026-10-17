@@ -6,6 +6,7 @@
 <title>SIEVE Control Room</title>
 <link rel="stylesheet" href="/static/style.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.4.0/3Dmol-min.js"></script>
 </head>
 <body>
 <div class="app">
@@ -26,7 +27,7 @@
         <span class="sub" id="s-best-sub">&nbsp;</span></div>
     </div>
     <div class="runbox">
-      <div class="brand">SIEVE <span>CO<sub>2</sub> at 298 K, 1 bar &middot; CoRE MOF 2019</span></div>
+      <div class="brand">SIEVE <span>CO<sub>2</sub> &middot; 298 K &middot; 1 bar</span></div>
       <div class="runrow">
         <span class="badge" id="replay" hidden>REPLAY 20&times;</span>
         <select id="run-select" aria-label="Run"></select>
@@ -34,16 +35,17 @@
     </div>
   </header>
 
+  <div class="headline" id="headline"></div>
   <div class="banner" id="stale" hidden></div>
 
   <section class="panel stage" aria-label="Current best structure">
     <div class="plabel">Current best structure</div>
-    <canvas id="mol" class="mol"></canvas>
+    <div id="mol" class="mol"><div class="mv" id="mv-a"></div><div class="mv" id="mv-b"></div></div>
     <div class="mol-info">
       <div class="mol-name mono" id="m-name">&nbsp;</div>
       <div class="mol-meta" id="m-meta">&nbsp;</div>
     </div>
-    <div class="mol-hint">drag to orbit</div>
+    <div class="mol-legend" id="m-legend"></div>
     <div class="empty center-msg" id="m-empty">No structure measured yet.</div>
   </section>
 
@@ -68,7 +70,7 @@
   </section>
 
   <section class="panel progress" aria-label="Progress">
-    <div class="plabel">Best uptake found vs CPU-hours spent</div>
+    <div class="plabel">Best uptake found, mol/kg <span class="dim">· as each arm measured it (tier 1 ±18%)</span></div>
     <div class="legend" id="c-legend"></div>
     <div class="chart" id="c-chart"><svg id="c-svg"></svg><div class="tip mono" id="c-tip" hidden></div></div>
   </section>

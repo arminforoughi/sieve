@@ -28,9 +28,10 @@ em { font-style: normal; color: var(--ink-3); font-size: 11px; margin-left: 4px;
 .app {
   display: grid; gap: 8px; padding: 8px; height: 100vh; min-height: 760px;
   grid-template-columns: repeat(12, minmax(0, 1fr));
-  grid-template-rows: auto auto minmax(0, 1.25fr) auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(0, 1.25fr) auto minmax(0, 1fr);
   grid-template-areas:
     "hero hero hero hero hero hero hero hero hero hero hero hero"
+    "head head head head head head head head head head head head"
     "banner banner banner banner banner banner banner banner banner banner banner banner"
     "stage stage stage stage stage stage stage scatter scatter scatter scatter scatter"
     "workers workers workers workers workers workers workers workers workers workers workers workers"
@@ -38,7 +39,7 @@ em { font-style: normal; color: var(--ink-3); font-size: 11px; margin-left: 4px;
 }
 .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; position: relative;
   min-height: 0; overflow: hidden; }
-.plabel { font-size: 11px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3);
+.plabel { position: relative; z-index: 2; font-size: 11px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3);
   padding: 12px 16px 0; }
 .plabel .dim { letter-spacing: 0.04em; text-transform: none; font-weight: 400; }
 .empty { color: var(--ink-3); font-size: 13px; padding: 12px 16px; }
@@ -79,16 +80,18 @@ select { background: var(--panel); color: var(--ink); border: 1px solid var(--bo
 
 /* 3D structure */
 .stage { grid-area: stage; }
-.mol { position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; touch-action: none; }
-.mol:active { cursor: grabbing; }
-.mol-info { position: absolute; left: 16px; bottom: 12px; pointer-events: none; }
+.mol { position: absolute; inset: 0; }
+.mv { position: absolute; inset: 0; opacity: 0; transition: opacity 600ms ease; }
+.mv.on { opacity: 1; z-index: 1; }
+.mol-info { position: absolute; left: 16px; bottom: 12px; pointer-events: none; z-index: 2; background: rgba(255,255,255,0.85); padding: 4px 8px 4px 0; border-radius: 4px; }
 .mol-name { font-size: 18px; font-weight: 500; }
 .mol-meta { font-size: 13px; color: var(--ink-2); }
-.mol-hint { position: absolute; right: 16px; bottom: 12px; font-size: 11px; color: var(--ink-3); pointer-events: none; }
+.mol-hint { position: absolute; right: 16px; bottom: 12px; font-size: 11px; color: var(--ink-3); pointer-events: none; z-index: 2; }
+.el { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin: 0 3px 0 8px; vertical-align: -1px; }
 
 /* pool scatter */
 .scatter { grid-area: scatter; display: flex; flex-direction: column; }
-.scatter-legend { position: absolute; top: 10px; right: 16px; display: flex; gap: 12px; align-items: center;
+.scatter-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; padding: 4px 16px 0;
   font-size: 11px; color: var(--ink-3); }
 .scatter-legend .ramp { width: 96px; height: 8px; border-radius: 2px; }
 .scatter-legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--idle);
@@ -161,7 +164,7 @@ select { background: var(--panel); color: var(--ink); border: 1px solid var(--bo
   font: 12px var(--mono); padding: 3px 10px; cursor: pointer; }
 .filters button.on { color: var(--ink); border-color: var(--ink-3); }
 .events { list-style: none; margin: 0; padding: 0 8px 8px; overflow-y: auto; flex: 1; font-size: 13px; }
-.events li { display: grid; grid-template-columns: 66px 100px 60px minmax(0, 1fr); gap: 6px; padding: 2px 8px;
+.events li { display: grid; grid-template-columns: 64px 124px 58px minmax(0, 1fr); gap: 6px; padding: 2px 8px;
   border-left: 2px solid transparent; white-space: nowrap; animation: ev-in 150ms ease-out; }
 .events li .t, .events li .who { color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; }
 .events li .verb { color: var(--ink-2); }
@@ -175,7 +178,7 @@ select { background: var(--panel); color: var(--ink); border: 1px solid var(--bo
 
 @media (max-width: 1100px) {
   .app { height: auto; grid-template-columns: 1fr; grid-template-rows: none;
-    grid-template-areas: "hero" "banner" "stage" "scatter" "workers" "agents" "progress" "stream"; }
+    grid-template-areas: "hero" "head" "banner" "stage" "scatter" "workers" "agents" "progress" "stream"; }
   .hero { flex-wrap: wrap; } .strip { flex-wrap: wrap; }
   .stage, .scatter { height: 360px; } .agents, .progress, .stream { height: 300px; }
 }
@@ -184,3 +187,8 @@ select { background: var(--panel); color: var(--ink); border: 1px solid var(--bo
 .job.stalled { box-shadow: inset 0 0 0 1px var(--red); }
 .job.stalled .sid span:last-child { color: var(--red); }
 .job.stalled .smeta { color: var(--ink-2); }
+.headline { grid-area: head; font-size: 14px; color: var(--ink-2); padding: 0 8px; }
+.mol-legend { position: absolute; top: 10px; right: 16px; z-index: 2; font-size: 12px; color: var(--ink-2); }
+.events li { white-space: normal; align-items: baseline; }
+.events li .msg { white-space: normal; overflow: visible; }
+.events li .who { white-space: nowrap; }
