@@ -26,7 +26,9 @@ import json
 import math
 import os
 import re
+import resource
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -44,6 +46,9 @@ DEFAULT_BUDGET_CPU_S = 4 * 3600.0
 GRID_SPACING_A = 0.3  # IRMOF-1: 0.661 +/- 0.058 (0.3 A grid) vs 0.696 +/- 0.079 direct
 GRID_CACHE_CAP_BYTES = int(float(os.environ.get("SIEVE_GRID_CACHE_GB", "1.0")) * 1e9)
 GRID_PIN_S = 900.0  # never evict a grid used in the last 15 minutes
+HEARTBEAT_S = 5.0
+TIMEOUT_FACTOR = 4.0  # CPU limit = 4x estimate (bounded by the tier's max)
+WALL_BACKSTOP = 6.0   # wall-clock kill only if a job is stuck, not merely slow
 CACHE_ROOT = Path(os.environ.get("SIEVE_CACHE", Path.home() / ".cache" / "sieve"))
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CORE_CSV = PROJECT_ROOT / "data" / "raw" / "2019-11-01-ASR-public_12020.csv"
@@ -64,15 +69,35 @@ TIERS = {
 }
 
 
+MIN_STEPS_PER_CYCLE = 20  # RASPA: one cycle = max(20, N molecules) MC moves
+
+
 @dataclass(frozen=True)
 class CostModel:
-    """CPU-second priors, calibrated on IRMOF-1 on one Apple M-series core. Refit by fit_cost_model."""
+    """CPU-second model; priors calibrated on IRMOF-1 on one M1 Max performance core.
+
+    A cycle is max(20, N) moves, so cost scales with how much CO2 the structure holds -- the
+    quantity being measured. N is predicted from this structure's earlier result if there is one,
+    else from uptake_prior. A direct move loops over every framework atom; a grid move does not.
+    """
     direct_a: float = 0.5
-    direct_b: float = 2.3e-5   # per (cycle x framework atom in the simulated supercell)
-    grid_g: float = 7.0e-8     # per (grid point x supercell atom x grid type)
+    direct_k: float = 1.14e-6   # per (move x framework atom in the simulated supercell)
+    grid_g: float = 7.0e-8      # build: per (grid point x supercell atom x grid type)
     grid_mc_a: float = 0.5
-    grid_mc_c: float = 0.0093  # per cycle
+    grid_mc_k: float = 4.4e-4   # per move
+    uptake_prior: float = 1.5   # mol/kg, used to predict N before a structure is first measured
     n_fits: int = 0
+
+    @staticmethod
+    def molecules(desc: "Descriptors", uptake_molkg: float) -> float:
+        cells = desc.unit_cells[0] * desc.unit_cells[1] * desc.unit_cells[2]
+        grams_per_mol = desc.density * desc.volume * cells * 0.602214  # rho * V * N_A
+        return uptake_molkg * grams_per_mol / 1000.0
+
+    def moves(self, desc: "Descriptors", tier: int, uptake_molkg: float | None) -> float:
+        t = TIERS[tier]
+        n = self.molecules(desc, uptake_molkg if uptake_molkg is not None else self.uptake_prior)
+        return (t.cycles + t.init_cycles) * max(MIN_STEPS_PER_CYCLE, n)
 
 
 SCHEMA = """
@@ -92,6 +117,8 @@ CREATE TABLE IF NOT EXISTS evaluations (
     result_json  TEXT,                   -- descriptors / per-phase costs / error text
     worker_id    TEXT,
     started_at   REAL NOT NULL,
+    heartbeat_at REAL,                   -- updated every few s while running
+    heartbeat_cpu_s REAL,                -- CPU consumed as of heartbeat_at; charged if lost
     finished_at  REAL
 );
 CREATE INDEX IF NOT EXISTS ix_eval_run ON evaluations(run_id, status);
@@ -101,7 +128,7 @@ CREATE TABLE IF NOT EXISTS timeouts (
     structure    TEXT NOT NULL,
     tier         INTEGER NOT NULL,
     phase        TEXT NOT NULL,          -- makegrid | mc_direct | mc_grid
-    timeout_s    REAL NOT NULL,
+    timeout_s    REAL NOT NULL,          -- CPU-second limit that was hit
     n_atoms_sim  INTEGER,
     killed_at    REAL NOT NULL
 );
@@ -447,39 +474,50 @@ class Oracle:
 
     # -- cost model -------------------------------------------------------------------------
 
-    def fit_cost_model(self) -> CostModel:
-        """Refit the per-phase cost coefficients from every finished phase in this DB."""
+    def fit_cost_model(self, run_only: bool = False) -> CostModel:
+        """Refit cost coefficients (and the uptake prior) from finished phases in this DB."""
         prior = CostModel()
-        d, g, m = [], [], []
-        for (rj,) in self.con.execute(
-                "SELECT result_json FROM evaluations WHERE tier>0 AND status='ok'"):
+        where = "tier>0 AND status='ok'" + (" AND run_id=?" if run_only else "")
+        args = (self.run_id,) if run_only else ()
+        d, g, m, u = [], [], [], []
+        for rj, up in self.con.execute(f"SELECT result_json, uptake_molkg FROM evaluations "
+                                       f"WHERE {where}", args):
+            u.append(up)
             for p in json.loads(rj or "{}").get("phases", []):
                 if p.get("status") != "ok":
                     continue
-                if p["kind"] == "mc_direct":
-                    d.append((p["cpu_s"] - prior.direct_a) / (p["cycles"] * p["n_atoms_sim"]))
+                if p["kind"] == "mc_direct" and p.get("moves"):
+                    d.append((p["cpu_s"] - prior.direct_a) / (p["moves"] * p["n_atoms_sim"]))
                 elif p["kind"] == "makegrid":
                     g.append(p["cpu_s"] / (p["grid_points"] * p["n_atoms_sim"] * p["grid_types"]))
-                elif p["kind"] == "mc_grid":
-                    m.append((p["cpu_s"] - prior.grid_mc_a) / p["cycles"])
+                elif p["kind"] == "mc_grid" and p.get("moves"):
+                    m.append((p["cpu_s"] - prior.grid_mc_a) / p["moves"])
         med = lambda xs, default: sorted(xs)[len(xs) // 2] if len(xs) >= 3 else default  # noqa: E731
-        return CostModel(direct_b=med(d, prior.direct_b), grid_g=med(g, prior.grid_g),
-                         grid_mc_c=med(m, prior.grid_mc_c), n_fits=len(d) + len(g) + len(m))
+        return CostModel(direct_k=med(d, prior.direct_k), grid_g=med(g, prior.grid_g),
+                         grid_mc_k=med(m, prior.grid_mc_k), uptake_prior=med(u, prior.uptake_prior),
+                         n_fits=len(d) + len(g) + len(m))
 
     @staticmethod
     def grid_points(desc: Descriptors) -> float:
         return desc.volume / GRID_SPACING_A ** 3
 
+    def known_uptake(self, structure: str) -> float | None:
+        """This structure's best existing GCMC estimate (any run in this DB), for cost planning."""
+        row = self.con.execute(
+            "SELECT uptake_molkg FROM evaluations WHERE structure=? AND status='ok' AND tier>0 "
+            "ORDER BY tier DESC, finished_at DESC LIMIT 1", (structure,)).fetchone()
+        return None if row is None else float(row[0])
+
     def plan(self, desc: Descriptors, tier: int, mode: str = "auto",
-             model: CostModel | None = None) -> Plan:
+             model: CostModel | None = None, uptake_hint: float | None = None) -> Plan:
         m = model or CostModel()
-        t = TIERS[tier]
-        cycles = t.cycles + t.init_cycles
-        direct = m.direct_a + m.direct_b * cycles * desc.n_atoms_sim
+        moves = m.moves(desc, tier, uptake_hint if uptake_hint is not None
+                        else self.known_uptake(desc.structure))
+        direct = m.direct_a + m.direct_k * moves * desc.n_atoms_sim
         cached = self.env.has_grid(desc.alias)
         build = 0.0 if cached else (m.grid_g * self.grid_points(desc) * desc.n_atoms_sim
                                     * len(forcefield.GRID_TYPES))
-        grid = build + m.grid_mc_a + m.grid_mc_c * cycles
+        grid = build + m.grid_mc_a + m.grid_mc_k * moves
         if mode == "auto":
             mode = "grid" if grid < direct else "direct"
         est = grid if mode == "grid" else direct
@@ -498,32 +536,59 @@ class Oracle:
 
     # -- tier 1 / 2 -------------------------------------------------------------------------
 
-    def _run_child(self, job: dict, deadline: float) -> dict:
-        """Run one RASPA call in a child process; SIGKILL it at the deadline."""
+    def _run_child(self, job: dict, cpu_limit_s: float, eval_id: str, cpu_before: float) -> dict:
+        """Run one RASPA call in a child process under a kernel-enforced CPU-time limit.
+
+        The limit is CPU time (RLIMIT_CPU -> SIGXCPU), not wall time: the budget is CPU-seconds,
+        and a wall clock would kill jobs merely because the machine is busy. A wall backstop of
+        WALL_BACKSTOP x the CPU limit catches a job that hangs without using CPU.
+        """
+        import psutil
+
         work = Path(tempfile.mkdtemp(dir=self.env.jobs, prefix="j-"))
         job = {**job, "workdir": str(work)}
         job_path, out_path, err_path = work / "job.json", work / "out.json", work / "stderr.txt"
         job_path.write_text(json.dumps(job))
+        soft = max(1, math.ceil(cpu_limit_s))
+
+        def limit() -> None:
+            resource.setrlimit(resource.RLIMIT_CPU, (soft, soft + 5))
+
         t0 = time.time()
+        backstop = t0 + WALL_BACKSTOP * soft + 30.0
         with open(err_path, "w") as err_f:
             proc = subprocess.Popen([sys.executable, "-m", "sieve._raspa_job", str(job_path),
                                      str(out_path)], stdout=subprocess.DEVNULL, stderr=err_f,
-                                    cwd=work, start_new_session=True)
-            killed = False
+                                    cwd=work, start_new_session=True, preexec_fn=limit)
+            ps = psutil.Process(proc.pid)
+            wall_killed, beat = False, 0.0
             while True:
                 pid, wstatus, ru = os.wait4(proc.pid, os.WNOHANG)
                 if pid:
                     break
-                if time.time() > deadline:
-                    os.killpg(proc.pid, 9)
+                now = time.time()
+                if now - beat > HEARTBEAT_S:
+                    beat = now
+                    try:
+                        c = ps.cpu_times()
+                        used = cpu_before + c.user + c.system
+                    except psutil.Error:
+                        used = None
+                    self.con.execute("UPDATE evaluations SET heartbeat_at=?, heartbeat_cpu_s=? "
+                                     "WHERE eval_id=?", (now, used, eval_id))
+                if now > backstop:
+                    os.killpg(proc.pid, signal.SIGKILL)
                     _, wstatus, ru = os.wait4(proc.pid, 0)
-                    killed = True
+                    wall_killed = True
                     break
                 time.sleep(0.05)
+        sig = os.WTERMSIG(wstatus) if os.WIFSIGNALED(wstatus) else None
         phase = {"kind": job["kind"], "cpu_s": ru.ru_utime + ru.ru_stime,
-                 "wall_s": time.time() - t0, "exit_code": os.waitstatus_to_exitcode(wstatus)}
-        if killed:
+                 "wall_s": time.time() - t0, "exit_code": os.waitstatus_to_exitcode(wstatus),
+                 "cpu_limit_s": soft}
+        if wall_killed or sig in (signal.SIGXCPU, signal.SIGKILL):
             phase["status"] = "timeout"
+            phase["killed_by"] = "wall_backstop" if wall_killed else "cpu_limit"
         elif phase["exit_code"] == 0 and out_path.exists():
             phase["status"] = "ok"
             phase["result"] = json.loads(out_path.read_text())
@@ -535,22 +600,26 @@ class Oracle:
 
     def simulate(self, desc: Descriptors, tier: int, mode: str = "auto",
                  timeout_s: float | None = None, worker_id: str | None = None,
-                 cost_model: CostModel | None = None) -> Evaluation:
+                 cost_model: CostModel | None = None,
+                 uptake_hint: float | None = None) -> Evaluation:
         """Run one GCMC evaluation (grid build if needed + MC). Blocks.
 
+        timeout_s is a CPU-second limit for the whole evaluation (all phases).
         Returns status 'ok', 'timeout' or 'error'; never raises for a failed simulation.
         Raises BudgetExhausted if the estimate does not fit in the remaining budget.
         """
         if not desc.parse_ok:
             raise ValueError(f"{desc.structure}: unusable structure ({desc.error})")
         t = TIERS[tier]
-        plan = self.plan(desc, tier, mode, cost_model)
+        model = cost_model or CostModel()
+        if uptake_hint is None:
+            uptake_hint = self.known_uptake(desc.structure)
+        plan = self.plan(desc, tier, mode, model, uptake_hint)
         if timeout_s is None:
-            timeout_s = min(t.max_timeout_s, max(30.0, 4.0 * plan.est_cpu_s))
+            timeout_s = min(t.max_timeout_s, max(30.0, TIMEOUT_FACTOR * plan.est_cpu_s))
         eval_id = self._reserve(desc.structure, tier, plan.mode, plan.est_cpu_s, timeout_s,
                                 worker_id)
         t0 = time.time()
-        deadline = t0 + timeout_s
         base = {
             "alias": desc.alias, "cif_path": desc.prepared_path, "elements": desc.elements,
             "unit_cells": list(desc.unit_cells), "forcefield": forcefield.NAME,
@@ -561,14 +630,15 @@ class Oracle:
         }
         cost = {"n_atoms_sim": desc.n_atoms_sim, "cycles": t.cycles + t.init_cycles,
                 "grid_points": self.grid_points(desc), "grid_types": len(forcefield.GRID_TYPES)}
-        phases = []
+        phases: list[dict] = []
+        used = lambda: sum(p["cpu_s"] for p in phases)  # noqa: E731
         if plan.mode == "grid":
             self.env.touch_grid(desc.alias)
             if plan.build_grid:
                 private = self.env.private_root()
                 try:
                     p = self._run_child({**base, "kind": "makegrid", "raspa_root": str(private)},
-                                        deadline)
+                                        timeout_s, eval_id, 0.0)
                     if p["status"] == "ok" and not (p["result"].get("grid_ok")
                                                     and self.env.publish(private, desc.alias)):
                         p["status"], p["stderr"] = "error", "grid build did not complete"
@@ -579,14 +649,17 @@ class Oracle:
         if not phases or phases[-1]["status"] == "ok":
             kind = "mc_grid" if plan.mode == "grid" else "mc_direct"
             p = self._run_child({**base, "kind": kind, "raspa_root": str(self.env.root),
-                                 "cycles": t.cycles, "init_cycles": t.init_cycles}, deadline)
+                                 "cycles": t.cycles, "init_cycles": t.init_cycles},
+                                max(1.0, timeout_s - used()), eval_id, used())
+            if p["status"] == "ok":
+                n = p["result"]["molecules_per_cell"] * math.prod(desc.unit_cells)
+                p["moves"] = (t.cycles + t.init_cycles) * max(MIN_STEPS_PER_CYCLE, n)
             phases.append({**p, **cost})
 
-        cpu = sum(p["cpu_s"] for p in phases)
-        wall = time.time() - t0
+        cpu, wall = used(), time.time() - t0
         last = phases[-1]
         meta = {"plan": asdict(plan), "phases": phases, "unit_cells": list(desc.unit_cells),
-                "n_atoms_sim": desc.n_atoms_sim}
+                "n_atoms_sim": desc.n_atoms_sim, "uptake_hint": uptake_hint}
         status = last["status"]
         if status == "timeout":
             self.con.execute("INSERT INTO timeouts VALUES (?,?,?,?,?,?,?,?)",

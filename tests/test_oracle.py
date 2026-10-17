@@ -17,7 +17,8 @@ def test_timeout_is_a_result_not_an_exception(oracle, tmp_path):
     desc = oracle.tier0(CIF)
     ev = oracle.simulate(desc, 1, mode="direct", timeout_s=2.0)
     assert ev.status == "timeout" and ev.uptake_molkg is None
-    assert 1.5 < ev.wall_s < 4.0
+    assert 1.5 < ev.cpu_s < 4.0  # CPU-time limit, enforced by the kernel
+    assert ev.result["phases"][-1]["killed_by"] == "cpu_limit"
     con = sqlite3.connect(tmp_path / "t.db")
     assert con.execute("SELECT phase FROM timeouts").fetchone()[0] == "mc_direct"
     assert con.execute("SELECT status FROM evaluations WHERE tier=1").fetchone()[0] == "timeout"
