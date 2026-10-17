@@ -12,13 +12,23 @@ const REFS = ["Cu-BTC", "MgMOF-74-VASP"];
 const LIT = { "Cu-BTC": ["≈ 4–4.5", "HKUST-1, ~298 K, 1 bar"], "MgMOF-74-VASP": ["≈ 8", "296 K, 1 atm (Caskey et al., JACS 2008)"] };
 // series styles: the selected structure is the only coloured series; comparators are ink tones + dashes
 const COMP_STYLE = [{ c: INK, dash: "6 3" }, { c: "#7C828E", dash: "2 3" }, { c: "#A9AEB7", dash: "9 3 2 3" }];
-const S = { items: [], data: {}, meas: {}, sel: null, v: null, fw: null, cube: null, shapes: [], frames: [], co2: null, anim: null, moved: false, tick: null };
+const S = { zeoOn: null, items: [], data: {}, meas: {}, sel: null, v: null, fw: null, cube: null, shapes: [], frames: [], co2: null, anim: null, moved: false, tick: null };
 const esc = (t) => String(t ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const fx = (x, k = 2) => (x == null || isNaN(x) ? "–" : Number(x).toFixed(k));
-const label = (n) => ({ "Cu-BTC": "HKUST-1", "MgMOF-74-VASP": "Mg-MOF-74" }[n] || String(n).replace(/_clean$/, ""));
+const zeo = (n) => { const m = /^IZA-([A-Z]{3})$/i.exec(String(n || "")); return m ? m[1].toUpperCase() : null; };
+const label = (n) => (zeo(n) ? `${zeo(n)} zeolite` : { "Cu-BTC": "HKUST-1", "MgMOF-74-VASP": "Mg-MOF-74" }[n] || String(n).replace(/_clean$/, ""));
+// strong-binding share: exactly 0 -> "0%", under 10% -> one decimal (0.002 -> "0.2%"), else integer
+const pct = (f) => { const v = 100 * f; return v === 0 ? "0" : v < 10 ? v.toFixed(1) : String(Math.round(v)); };
+const ZEO_CAVEAT = "Pure-silica frameworks (IZA-SC, DLS-76 geometry) with no extra-framework cations. Industrial zeolites such as 13X (NaX) and 5A (CaA) "
+  + "bind CO₂ through their Na⁺/Ca²⁺ cations and the field around them, which neither these structures nor this charge-free model contain, "
+  + "so these values are not predictions for 13X or 5A, and any agreement with their measured uptake is coincidental. They show what the topology alone gives under the same force field. "
+  + "No pore blocking either: GCMC also fills cages CO₂ cannot enter through their 6-rings (the sodalite cages of LTA and FAU), "
+  + "so those uptakes are inflated (LTA's deepest wells, −15.5 kJ/mol, sit inside its sodalite cages).";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const getJSON = (u) => fetch(u).then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); });
 const typical = () => (S.items.find((i) => /typical/.test(i.role)) || {}).name;
+const zeoRefs = () => S.items.filter((i) => i.group === "zeolite" && i.ready).map((i) => i.name);
+const zeoShown = () => (S.zeoOn || []).filter((n) => zeoRefs().includes(n));
 const at = (d, pb) => (d && d.isotherm ? d.isotherm.find((q) => Math.abs(q.p_bar - pb) < 1e-9) || {} : {});
 const tierTag = (t) => `<span class="tier t${t}">T${t}</span>`;
 
@@ -36,15 +46,19 @@ async function boot() {
   $("hist-vs").onchange = histChart;
   for (const id of ["iso-chart", "hist-chart"]) new ResizeObserver(() => drawCharts()).observe($(id));
   // comparators load quietly in the background (only if already computed: never start work for them)
-  for (const n of [...REFS, typical()].filter(Boolean)) {
+  S.zeoOn = params.get("zeo") != null ? params.get("zeo").split(",").filter(Boolean) : zeoRefs().slice(0, 1);
+  for (const n of [...REFS, typical(), ...zeoRefs()].filter(Boolean)) {
     if ((S.items.find((i) => i.name === n) || {}).ready) loadScience(n, false);
-    loadMeas(n);
+    if (!zeo(n)) loadMeas(n);
   }
   select(S.sel);
 }
 
 function renderPresets() {
-  $("presets").innerHTML = S.items.map((it) => `<button data-n="${esc(it.name)}" title="${esc(it.role)}">${esc(label(it.name))}<small>${esc(it.role.replace(/^reference: .*/, "reference").replace("best confirmed on the full pool", "best confirmed").replace("a typical pool structure (median)", "typical").replace("computed on request", ""))}</small></button>`).join("");
+  const btn = (it) => `<button data-n="${esc(it.name)}" title="${esc(it.role)}">${esc(label(it.name))}<small>${esc(it.role.replace(/^reference: .*/, "reference").replace("best confirmed on the full pool", "best confirmed").replace("a typical pool structure (median)", "typical").replace("computed on request", "").replace("zeolite reference", it.ready ? "" : "not computed yet"))}</small></button>`;
+  const mofs = S.items.filter((i) => i.group !== "zeolite"), zs = S.items.filter((i) => i.group === "zeolite");
+  $("presets").innerHTML = `<span class="pgroup">${mofs.map(btn).join("")}</span>`
+    + (zs.length ? `<span class="pgroup zeo"><span class="glab" title="${esc(ZEO_CAVEAT)}">Zeolite references <small>pure-silica (no cations)</small></span>${zs.map((it) => btn(it).replace("<button ", `<button class="${it.ready ? "" : "todo"}" `)).join("")}</span>` : "");
   $("presets").onclick = (e) => { const b = e.target.closest("button"); if (b) select(b.dataset.n); };
   markPresets();
 }
@@ -58,19 +72,23 @@ function select(name) {
   const it = S.items.find((i) => i.name === name);
   document.title = `SIEVE · ${label(name)}`;
   $("title").textContent = label(name);
-  $("role").textContent = it && it.role !== "computed on request" ? it.role : "pool structure";
+  $("role").textContent = zeo(name) ? "zeolite reference · pure-silica (no cations)" : it && it.role !== "computed on request" ? it.role : "pool structure";
   $("dl-cif").href = `/api/download/cif?name=${encodeURIComponent(name)}`;
   if (S.v && S.fwName !== name) { clearInterval(S.anim); S.v.clear(); S.v.removeAllShapes(); S.fw = null; S.fwName = null; S.shapes = []; S.v.render(); }
   $("wait").classList.remove("pill"); waitMsg(`<span><span class="spin"></span> Loading structure…</span>`);
   renderAll();
   loadMeas(name).then(() => { if (S.sel === name) renderAll(); });
   loadScience(name, true);
-  loadReview(name);
+  if (zeo(name)) {
+    $("rv-sub").textContent = "not run for zeolite references";
+    $("review").innerHTML = `<p class="note">The peer reviewer checks the claims SIEVE makes about screened MOFs. ${esc(label(name))} is a reference framework from the IZA-SC database, so no write-up or review is produced for it.</p><p class="note">${esc(ZEO_CAVEAT)}</p>`;
+  } else loadReview(name);
 }
 
 // ----------------------------------------------------------------------------------- data
 async function loadMeas(name) {
   if (S.meas[name]) return S.meas[name];
+  if (zeo(name)) return (S.meas[name] = { rows: [], pool: null, zeolite: zeo(name) });
   try { S.meas[name] = await getJSON(`/api/measurements?name=${encodeURIComponent(name)}`); }
   catch (_) { S.meas[name] = { rows: [], pool: null }; }
   if (S.sel === name || S.data[S.sel]) renderAll();
@@ -130,7 +148,11 @@ function header() {
   if (best) tags.push(`<span class="chip ${best.tier === 2 ? "ok" : "warn"}">screened: ${tierTag(best.tier)} ${fx(best.uptake)} ± ${fx(best.err)} mol/kg</span>`);
   else if (m.rows && m.pool) tags.push(`<span class="chip">not screened by any run</span>`);
   if (d.n_atoms || p.n_atoms) tags.push(`<span class="chip">${d.n_atoms || p.n_atoms} atoms / cell</span>`);
-  if (m.rows && !m.pool) tags.push(`<span class="chip" title="reference structure outside the 12,020-structure CoRE pool: no tier-0 descriptors">not in the screening pool</span>`);
+  if (zeo(S.sel)) {
+    tags.push(`<span class="chip" title="IZA-SC Database of Zeolite Structures (Baerlocher & McCusker), DLS-76-optimised SiO₂">IZA framework ${esc(zeo(S.sel))}</span>`);
+    tags.push(`<span class="chip warn" title="${esc(ZEO_CAVEAT)}">pure-silica · no cations</span>`);
+    tags.push(`<span class="chip" title="zeolites are not in CoRE MOF 2019, so there are no Zeo++ pore descriptors (PLD, LCD, void fraction)">no CoRE descriptors</span>`);
+  } else if (m.rows && !m.pool) tags.push(`<span class="chip" title="reference structure outside the 12,020-structure CoRE pool: no tier-0 descriptors">not in the screening pool</span>`);
   $("tags").innerHTML = tags.join("");
 }
 
@@ -147,10 +169,10 @@ function kpis() {
   $("kpis").innerHTML =
     kpi("Uptake at 0.15 bar", a15.uptake != null ? `${fx(a15.uptake)} <small>± ${fx(a15.err)}</small>` : wait, "mol/kg · flue-gas CO₂ pressure", true)
     + kpi("Uptake at 1 bar", a1.uptake != null ? `${fx(a1.uptake)} <small>± ${fx(a1.err)}</small>` : wait, "mol/kg · 298 K")
-    + kpi("Strong-binding pore", k.strong_fraction != null ? `${Math.round(100 * k.strong_fraction)}<small>%</small>` : wait, "of accessible volume below −10 kJ/mol")
+    + kpi("Strong-binding pore", k.strong_fraction != null ? `${pct(k.strong_fraction)}<small>%</small>` : wait, "of accessible volume below −10 kJ/mol")
     + kpi("Deepest well", k.min_kjmol != null ? `${fx(k.min_kjmol, 1)}` : wait, `kJ/mol · median ${fx(k.median_kjmol, 1)}`)
-    + kpi("PLD / LCD", p.PLD != null ? `${fx(p.PLD, 1)} <small>/</small> ${fx(p.LCD, 1)}` : "–", "Å · pore-limiting / largest cavity")
-    + kpi("Void fraction · density", p.VF != null ? `${fx(p.VF)} <small>·</small> ${fx(p.density)}` : "–", "· g/cm³ (tier-0 descriptors)");
+    + kpi("PLD / LCD", p.PLD != null ? `${fx(p.PLD, 1)} <small>/</small> ${fx(p.LCD, 1)}` : "–", p.PLD != null || !zeo(S.sel) ? "Å · pore-limiting / largest cavity" : "Å · not available: zeolites have no CoRE/Zeo++ descriptors")
+    + kpi("Void fraction · density", p.VF != null ? `${fx(p.VF)} <small>·</small> ${fx(p.density)}` : d.density != null ? `– <small>·</small> ${fx(d.density)}` : "–", p.VF != null ? "· g/cm³ (tier-0 descriptors)" : d.density != null ? "· g/cm³ (from the CIF; no void fraction without Zeo++)" : "· g/cm³ (tier-0 descriptors)");
   // capture performance: only once the props step has run for this structure
   const pr = d.props, none = ready ? `<span class="dim" title="python -m sieve.science --props ${esc(S.sel)}">–</span>` : wait;
   const pm = (o, k) => (o && o.value != null ? `${fx(o.value, k)} <small>± ${fx(o.err, k)}</small>` : null);
@@ -267,14 +289,15 @@ function caption() {
   if (!d || !d.pockets || !d.isotherm) { $("cap").textContent = ""; return; }
   const p = d.pockets, u15 = at(d, 0.15).uptake, tn = typical(), t15 = at(S.data[tn], 0.15).uptake, h15 = at(S.data["Cu-BTC"], 0.15).uptake;
   $("cap").innerHTML = `The shaded surfaces enclose the regions where a CO₂ oxygen is held more strongly than the threshold, computed from the same force field the GCMC uses. `
-    + `<b>${Math.round(100 * p.strong_fraction)}%</b> of the accessible pore binds below −10 kJ/mol; the deepest well is <b>${fx(p.min_kjmol, 1)} kJ/mol</b>. `
+    + `<b>${pct(p.strong_fraction)}%</b> of the accessible pore binds below −10 kJ/mol; the deepest well is <b>${fx(p.min_kjmol, 1)} kJ/mol</b>. `
     + (u15 != null ? `At 0.15 bar it holds <b>${fx(u15)} mol/kg</b>` + [t15 && S.sel !== tn ? `${fx(u15 / t15, 1)}× the typical pool structure` : "", h15 && S.sel !== "Cu-BTC" ? `${fx(u15 / h15, 1)}× HKUST-1 in the same model` : ""].filter(Boolean).map((s, i) => (i ? " and " : ", ") + s).join("") + "." : "");
 }
 
 // ---------------------------------------------------------------------------------- charts
 function compared() {
-  return [S.sel, ...REFS, typical()].filter((n, i, a) => n && a.indexOf(n) === i);
+  return [S.sel, ...REFS, typical(), ...zeoShown()].filter((n, i, a) => n && a.indexOf(n) === i);
 }
+const roleOf = (n) => (n === S.sel ? "selected" : REFS.includes(n) ? "reference" : zeo(n) ? "zeolite ref." : "typical");
 function styleOf(name) {
   if (name === S.sel) return { c: ACCENT, dash: null, w: 2.25, r: 3.5 };
   const k = compared().filter((n) => n !== S.sel).indexOf(name);
@@ -337,14 +360,14 @@ function isoChart() {
     ends.sort((a, b) => a.y - b.y).forEach((e, i, a) => { if (i && e.y - a[i - 1].y < 13) e.y = a[i - 1].y + 13; });
     for (const e of ends) svg.append("text").attr("class", "lbl ink").attr("x", W - m.r + 8).attr("y", e.y + 4).attr("font-weight", e.sel ? 600 : 400).text(e.t);
   }
-  for (const n of names) lg.push(`<span>${swatch(styleOf(n), true)}${esc(label(n))}${n === S.sel ? "" : REFS.includes(n) ? " (reference)" : " (typical)"}</span>`);
+  for (const n of names) lg.push(`<span>${swatch(styleOf(n), true)}${esc(label(n))}${n === S.sel ? "" : ` (${roleOf(n)})`}</span>`);
   if (mk[2]) lg.push(`<span><svg width="12" height="12"><path d="${d3.symbol(d3.symbolDiamond, 46)()}" transform="translate(6,6)" fill="${INK}"/></svg>screening run, tier 2</span>`);
   if (mk[1]) lg.push(`<span><svg width="12" height="12"><path d="${d3.symbol(d3.symbolDiamond, 46)()}" transform="translate(6,6)" fill="#fff" stroke="${INK}"/></svg>screening run, tier 1 (unconverged)</span>`);
   $("iso-legend").innerHTML = lg.join("");
 }
 
 function histChart() {
-  const sel = $("hist-vs"), opts = [...REFS, typical()].filter((n) => n && n !== S.sel);
+  const sel = $("hist-vs"), opts = [...REFS, typical(), ...zeoShown()].filter((n, i, a) => n && n !== S.sel && a.indexOf(n) === i);
   const keep = sel.value || typical() || "";
   sel.innerHTML = opts.map((n) => `<option value="${esc(n)}">${esc(label(n))}</option>`).join("") + `<option value="none">nothing</option>`;
   sel.value = opts.includes(keep) || keep === "none" ? keep : (opts.includes(typical()) ? typical() : opts[0] || "none");
@@ -404,7 +427,7 @@ function table() {
     ["Q<sub>st</sub> CO₂ <small>kJ/mol, GCMC 0.01 bar</small>", (n) => pmv((PR(n).qst || {}).fluct_low, 1)],
     ["K<sub>H</sub> CO₂ <small>mol/(kg·bar)</small>", (n) => pmv((PR(n).k_h || {}).CO2, 1, true)],
     ["sec", "Binding pockets (CO₂-oxygen probe)"],
-    ["Strong-binding pore <small>&lt; −10 kJ/mol</small>", (n) => (D(n).pockets ? `${Math.round(100 * D(n).pockets.strong_fraction)}%` : null)],
+    ["Strong-binding pore <small>&lt; −10 kJ/mol</small>", (n) => (D(n).pockets ? `${pct(D(n).pockets.strong_fraction)}%` : null)],
     ["Deepest well <small>kJ/mol</small>", (n) => (D(n).pockets ? fx(D(n).pockets.min_kjmol, 1) : null)],
     ["5th percentile <small>kJ/mol</small>", (n) => (D(n).pockets ? fx(D(n).pockets.p05_kjmol, 1) : null)],
     ["Median <small>kJ/mol</small>", (n) => (D(n).pockets ? fx(D(n).pockets.median_kjmol, 1) : null)],
@@ -412,15 +435,33 @@ function table() {
     ["PLD / LCD <small>Å</small>", (n) => (P(n).PLD != null ? `${fx(P(n).PLD, 1)} / ${fx(P(n).LCD, 1)}` : null)],
     ["Void fraction", (n) => (P(n).VF != null ? fx(P(n).VF) : null)],
     ["Density <small>g/cm³</small>", (n) => (P(n).density != null ? fx(P(n).density) : null)],
-    ["Metals", (n) => ((P(n).metals || D(n).metals || []).join(" ") || null)],
-    ["Open metal sites", (n) => (P(n).oms == null ? null : P(n).oms ? "yes" : "no")],
+    ["Metals", (n) => (zeo(n) ? `<span class="dim">none (Si, O)</span>` : (P(n).metals || D(n).metals || []).join(" ") || null)],
+    ["Open metal sites", (n) => (zeo(n) ? "no" : P(n).oms == null ? null : P(n).oms ? "yes" : "no")],
   ];
-  const th = cols.map((n) => `<th class="n ${n === S.sel ? "me" : ""}">${esc(label(n))}<br><span class="dim" style="font-weight:400">${n === S.sel ? "selected" : REFS.includes(n) ? "reference" : "typical"}</span></th>`).join("");
+  const th = cols.map((n) => `<th class="n ${n === S.sel ? "me" : ""}">${esc(label(n))}<br><span class="dim" style="font-weight:400">${roleOf(n)}</span></th>`).join("");
   $("cmp").innerHTML = `<thead><tr><th></th>${th}</tr></thead><tbody>` + rows.map((r) => {
     if (r[0] === "sec") return `<tr class="sec"><td colspan="${cols.length + 1}">${r[1]}</td></tr>`;
     const [lab, f, cls] = r[0] === "lit" ? [r[1], r[2], "lit"] : [r[0], r[1], ""];
     return `<tr class="${cls}"><td class="m">${lab}</td>${cols.map((n) => `<td class="n ${n === S.sel ? "me" : ""}">${cell(n, f)}</td>`).join("")}</tr>`;
   }).join("") + `</tbody>`;
+  zeoControls();
+}
+
+// zeolite reference columns: toggles for every computed IZA framework, plus the caveat
+function zeoControls() {
+  const box = $("cmp-zeo"); if (!box) return;
+  const refs = zeoRefs(), on = new Set(zeoShown());
+  const anyZ = zeo(S.sel) || on.size;
+  box.innerHTML = (refs.length ? `<span class="glab">Zeolite references <small>pure-silica (no cations)</small></span>`
+    + refs.map((n) => `<label class="ztog"><input type="checkbox" data-n="${esc(n)}" ${on.has(n) ? "checked" : ""}> ${esc(zeo(n))}</label>`).join("") : "")
+    + (anyZ ? `<p class="callout zcav">${esc(ZEO_CAVEAT)}</p>` : "");
+  box.querySelectorAll("input[data-n]").forEach((c) => (c.onchange = () => {
+    const s = new Set(zeoShown()); c.checked ? s.add(c.dataset.n) : s.delete(c.dataset.n);
+    S.zeoOn = refs.filter((n) => s.has(n));
+    params.set("zeo", S.zeoOn.join(",")); history.replaceState(null, "", `?${params}`);
+    for (const n of S.zeoOn) if (!S.data[n]) loadScience(n, false);
+    drawCharts(); table();
+  }));
 }
 
 function measTable() {
@@ -493,9 +534,10 @@ function initSearch() {
     try { items = await getJSON(`/api/search?q=${encodeURIComponent(term)}&limit=25`); } catch (_) { items = []; }
     if (my !== seq) return;
     list.hidden = false; cur = items.length ? 0 : -1;
-    list.innerHTML = items.length ? items.map((it) => `<li role="option" data-n="${esc(it.name)}"><b>${esc(label(it.name))}</b><span class="r">${it.science ? "computed" : "compute on open"}</span>
+    list.innerHTML = items.length ? items.map((it) => it.zeolite ? `<li role="option" data-n="${esc(it.name)}"><b>${esc(it.name)}</b><span class="r">${it.science ? "computed" : "compute on open"}</span>
+        <span class="d">IZA-SC zeolite framework ${esc(it.zeolite)} · pure-silica (no cations) · no CoRE pore descriptors</span></li>` : `<li role="option" data-n="${esc(it.name)}"><b>${esc(label(it.name))}</b><span class="r">${it.science ? "computed" : "compute on open"}</span>
         <span class="d">PLD ${fx(it.PLD, 1)} · LCD ${fx(it.LCD, 1)} Å · VF ${fx(it.VF)} · ρ ${fx(it.density)} · ${esc((it.metals || []).join(" ") || "no metal")}${it.oms ? " · OMS" : ""}</span></li>`).join("")
-      : `<li class="none">No pool structure matches “${esc(term)}”.</li>`;
+      : `<li class="none">No pool structure or IZA zeolite matches “${esc(term)}”.</li>`;
     paint();
   };
   q.oninput = () => { clearTimeout(timer); timer = setTimeout(run, 180); };

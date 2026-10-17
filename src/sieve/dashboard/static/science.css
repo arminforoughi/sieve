@@ -119,3 +119,15 @@ table.cmp tr.sec td { font-size: 11px; font-weight: 600; letter-spacing: 0.08em;
   .vtools .btn:first-of-type { margin-left: 0; }
 }
 .wait.pill { inset: auto 12px 12px 12px; justify-content: flex-start; text-align: left; padding: 8px 12px; border: 1px solid var(--grid); border-radius: 6px; background: rgba(255,255,255,0.94); }
+
+/* zeolite references: their own preset group and comparison toggles */
+.presets .pgroup { display: contents; }
+.presets .pgroup.zeo { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; flex-basis: 100%; padding-top: 6px; border-top: 1px dashed var(--border); }
+.glab { font: 600 11px var(--sans); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); margin-right: 4px; white-space: nowrap; }
+.glab small { text-transform: none; letter-spacing: 0; font-weight: 400; margin-left: 4px; }
+.presets button.todo { border-style: dashed; color: var(--ink-3); }
+.cmp-zeo { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0 0 8px; font-size: 12.5px; }
+.cmp-zeo:empty { display: none; }
+.ztog { display: inline-flex; align-items: center; gap: 4px; font: 12px var(--mono); color: var(--ink-2); border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px; cursor: pointer; }
+.ztog input { accent-color: var(--accent); margin: 0; }
+.cmp-zeo .zcav { flex-basis: 100%; margin: 2px 0 0; font-size: 12.5px; }

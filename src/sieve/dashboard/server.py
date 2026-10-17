@@ -385,12 +385,12 @@ def structure_payload(name: str) -> dict:
     import numpy as np
     from pymatgen.core import Structure
 
-    from sieve.oracle import PROJECT_ROOT, bundled_cif_dir, raspa_alias
+    from sieve.oracle import PROJECT_ROOT, bundled_cif_dir, raspa_alias, zeolite_cif
 
     path = PROJECT_ROOT / "data" / "prepared" / f"{raspa_alias(name)}.cif"
     if not path.exists():
         for cand in (PROJECT_ROOT / "data" / "cifs" / f"{name}.cif",
-                     bundled_cif_dir() / f"{name}.cif"):
+                     bundled_cif_dir() / f"{name}.cif", zeolite_cif(name) or Path("/nonexistent")):
             if cand.exists():
                 path = cand
                 break
@@ -398,7 +398,7 @@ def structure_payload(name: str) -> dict:
             return {"name": name, "error": "structure file not found"}
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        s = Structure.from_file(str(path))
+        s = _zeo_structure(path) if zeolite_cif(name) is not None and "prepared" not in path.parts else Structure.from_file(str(path))
     reps = [max(1, min(3, math.ceil(18.0 / x))) for x in s.lattice.abc]
     while len(s) * reps[0] * reps[1] * reps[2] > 2400 and max(reps) > 1:
         reps[reps.index(max(reps))] -= 1
@@ -437,6 +437,11 @@ def structure_payload(name: str) -> dict:
     }
 
 
+def _zeo_structure(path):
+    from sieve.oracle import _load_structure
+    return _load_structure(path)
+
+
 @lru_cache(maxsize=48)
 def cif_payload(name: str) -> dict:
     """The P1 CIF the simulation used, plus pore-void sample points in the same unit cell."""
@@ -445,10 +450,11 @@ def cif_payload(name: str) -> dict:
     import numpy as np
     from pymatgen.core import Structure
 
-    from sieve.oracle import PROJECT_ROOT, bundled_cif_dir, raspa_alias
+    from sieve.oracle import PROJECT_ROOT, bundled_cif_dir, raspa_alias, zeolite_cif
 
     path = PROJECT_ROOT / "data" / "prepared" / f"{raspa_alias(name)}.cif"
-    for cand in (path, PROJECT_ROOT / "data" / "cifs" / f"{name}.cif", bundled_cif_dir() / f"{name}.cif"):
+    for cand in (path, PROJECT_ROOT / "data" / "cifs" / f"{name}.cif", bundled_cif_dir() / f"{name}.cif",
+                 zeolite_cif(name) or Path("/nonexistent")):
         if cand.exists():
             path = cand
             break
@@ -456,13 +462,14 @@ def cif_payload(name: str) -> dict:
         return {"name": name, "error": "structure file not found"}
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        s = Structure.from_file(str(path))
+        s = Structure.from_file(str(path)) if zeolite_cif(name) is None or "prepared" in path.parts else _zeo_structure(path)
     rng = np.random.default_rng(0)
     trial = rng.random((1500, 3))
     d = s.lattice.get_all_distances(trial, s.frac_coords).min(axis=1)
     void = s.lattice.get_cartesian_coords(trial[d > 3.2][:250]) if (d > 3.2).any() else np.zeros((0, 3))
     reps = 2 if len(s) <= 300 else 1
     return {"name": name, "cif": path.read_text(), "n_cell": len(s), "reps": reps,
+            "density": round(float(s.density), 4), "volume": round(float(s.volume), 1),
             "elements": sorted({x.specie.symbol for x in s}),
             "lattice": [[round(float(v), 4) for v in row] for row in s.lattice.matrix],
             "void": [[round(float(v), 2) for v in p] for p in void]}
@@ -514,15 +521,43 @@ def _props_brief(name: str) -> dict | None:
             "qst": pick((p.get("qst") or {}).get("widom"))}
 
 
+ZEOLITE_SET = ("MFI", "CHA", "FAU", "LTA", "MOR", "DDR")  # the representative references computed first
+
+
+def zeolite_hits(q: str) -> list[dict]:
+    """IZA-SC zeolite frameworks matching q: "IZA-MFI", "zeolite MFI", "zeolite", "iza", or a code prefix."""
+    import re
+
+    from sieve.oracle import ZEOLITE_PREFIX, zeolite_codes
+    q = (q or "").strip().upper()
+    if not q:
+        return []
+    word = bool(re.search(r"\b(ZEOLITES?|IZA)\b", q))
+    rest = re.sub(r"\b(ZEOLITES?|IZA)\b|[-_\s]", "", q)
+    codes = zeolite_codes()
+    if rest:
+        hits = [c for c in codes if c.startswith(rest)]
+    else:
+        hits = [c for c in ZEOLITE_SET if c in codes] + [c for c in codes if c not in ZEOLITE_SET] if word else []
+    if not word and len(rest) < 2:
+        return []
+    return [{"name": f"{ZEOLITE_PREFIX}{c}", "zeolite": c, "PLD": None, "LCD": None, "VF": None, "ASA": None,
+             "density": None, "metals": [], "oms": False, "n_atoms": None, "parse_ok": True,
+             "science": _science_ready(f"{ZEOLITE_PREFIX}{c}")} for c in hits]
+
+
 def search(q: str, limit: int = 30) -> list[dict]:
-    """Pool structures whose name contains q (prefix matches first)."""
+    """Pool structures whose name contains q (prefix matches first), plus IZA zeolite references."""
     idx = pool_index()
     q = (q or "").strip().lower()
     if not q:
         return []
+    zeo = zeolite_hits(q)
     hits = [n for n in idx if q in n.lower()]
     hits.sort(key=lambda n: (not n.lower().startswith(q), len(n), n))
-    return [{**idx[n], "science": _science_ready(n)} for n in hits[:limit]]
+    pool = [{**idx[n], "science": _science_ready(n)} for n in hits[:limit]]
+    # an explicit zeolite query lists zeolites first; a bare code ("MFI") puts them after the pool's prefix hits
+    return (zeo + pool)[:limit] if zeo and ("zeol" in q or "iza" in q) else (pool[:max(0, limit - len(zeo[:5]))] + zeo[:5])
 
 
 def _estimates(con: sqlite3.Connection, run_id: str) -> dict:
@@ -776,7 +811,12 @@ def create_app(db: str, replay_run: str | None = None) -> FastAPI:
         if out.get("status") == "computing":
             out["since"] = sci_started.setdefault(name, time.time())
         if out.get("status") == "ready":
-            out["cif"] = cif_payload(name).get("cif")
+            cp = cif_payload(name)
+            out["cif"] = cp.get("cif")
+            out["density"] = cp.get("density")
+        from sieve.oracle import zeolite_code
+        if zeolite_code(name):
+            out["zeolite"] = zeolite_code(name)
         return out
 
     @app.get("/api/science/cube")
@@ -791,6 +831,21 @@ def create_app(db: str, replay_run: str | None = None) -> FastAPI:
         from sieve.agents import reviewer
         return reviewer.get(name)
 
+    @app.get("/api/validation/chain")
+    def api_validation_chain(run: str | None = None):
+        from sieve.dashboard import validation
+        return validation.chain(db, run)
+
+    @app.get("/api/validation/reviews")
+    def api_validation_reviews():
+        from sieve.dashboard import validation
+        return validation.reviews()
+
+    @app.get("/api/validation/review")
+    def api_validation_review(name: str):  # read-only: never starts a review (unlike /api/review)
+        from sieve.dashboard import validation
+        return validation.review(name)
+
     @app.get("/api/science/list")
     def api_science_list():
         from sieve import science
@@ -800,6 +855,12 @@ def create_app(db: str, replay_run: str | None = None) -> FastAPI:
                  {"name": "MgMOF-74-VASP", "role": "reference: Mg-MOF-74"}]
         if typical.exists():
             items.append({"name": typical.read_text().strip(), "role": "a typical pool structure (median)"})
+        from sieve.oracle import ZEOLITE_PREFIX, zeolite_code, zeolite_codes
+        codes = set(zeolite_codes())
+        computed = sorted(c for c in codes if (science.SCI_DIR / f"{ZEOLITE_PREFIX}{c}.json").exists())
+        for c in [c for c in ZEOLITE_SET if c in codes] + [c for c in computed if c not in ZEOLITE_SET]:
+            items.append({"name": f"{ZEOLITE_PREFIX}{c}", "role": "zeolite reference", "group": "zeolite", "zeolite": c,
+                          "note": "pure-silica (no cations)"})
         seen = {i["name"] for i in items}
         if science.SCI_DIR.exists():  # anything a scientist asked for earlier, newest first
             extra = sorted((f for f in science.SCI_DIR.glob("*.json") if not f.name.startswith("review-") and not f.name.endswith(".props.json")),
@@ -809,7 +870,7 @@ def create_app(db: str, replay_run: str | None = None) -> FastAPI:
                     n = json.loads(f.read_text()).get("name") or f.stem
                 except ValueError:
                     continue
-                if n not in seen:
+                if n not in seen and not zeolite_code(n):
                     seen.add(n)
                     items.append({"name": n, "role": "computed on request"})
         return [{**i, "ready": (science.SCI_DIR / f"{i['name']}.json").exists()} for i in items]

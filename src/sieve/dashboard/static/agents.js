@@ -384,4 +384,7 @@ async function boot() {
     enqueue(evs, !first); first = false;
   });
 }
-boot();
+// the Validation view (validation.js) owns the page when ?view=validation; the run view boots on first show
+let booted = false;
+window.agentsBoot = () => { if (!booted) { booted = true; boot(); } };
+if (params.get("view") !== "validation") window.agentsBoot();

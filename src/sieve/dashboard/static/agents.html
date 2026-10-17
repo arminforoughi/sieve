@@ -11,7 +11,14 @@
 <body>
 <header class="shell" data-page="agents" data-runs></header>
 <script src="/static/shell.js"></script>
-<div class="ag-app">
+<nav class="ag-modes" aria-label="View">
+  <div class="seg" role="tablist">
+    <button role="tab" id="m-run" aria-selected="true">Screening run</button>
+    <button role="tab" id="m-val" aria-selected="false">Validation</button>
+  </div>
+  <span class="dim" id="mode-note">the agent team screening the pool, live</span>
+</nav>
+<div class="ag-app" id="run-view">
   <header class="ag-top">
     <div class="ag-vitals">
       <div class="kv"><span class="k">human interventions</span><span class="v mono big" id="a-int">0</span></div>
@@ -45,6 +52,33 @@
     <div class="rounds" id="rounds"></div>
   </section>
 </div>
+<section class="val-app" id="val-view" hidden aria-label="Validation">
+  <section class="panel val-chain" aria-label="Validation chain">
+    <div class="plabel">Validation chain <span class="dim">· every claim passes four independent checks · live counts from data/runs.db and data/science/</span></div>
+    <ol class="chain" id="chain"><li class="skel-row"></li></ol>
+  </section>
+  <div class="val-main">
+    <section class="panel val-tree" aria-label="Recursive peer review">
+      <div class="vt-head">
+        <div class="plabel">Peer review, recursive <span class="dim">· lead reviewer → one sub-reviewer per claim → sub-sub-reviewers for compound claims</span></div>
+        <div class="vt-tools">
+          <label for="rv-select" class="dim">Structure</label><select id="rv-select" aria-label="Reviewed structure"></select>
+          <button class="btn sm" id="rv-play" aria-label="Replay the review">Replay</button>
+          <input type="range" id="rv-pos" min="0" max="0" value="0" aria-label="Replay position">
+          <span class="mono dim" id="rv-clock">–</span>
+        </div>
+      </div>
+      <div class="vt-sum" id="rv-sum"></div>
+      <div class="vt-svg" id="rv-tree"></div>
+      <div class="vt-legend" id="rv-legend"></div>
+    </section>
+    <aside class="panel val-detail" aria-label="Claim detail">
+      <div class="plabel">Detail <span class="dim">· click any node</span></div>
+      <div class="vd-body" id="rv-detail"></div>
+    </aside>
+  </div>
+</section>
 <script src="/static/agents.js"></script>
+<script src="/static/validation.js"></script>
 </body>
 </html>

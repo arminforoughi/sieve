@@ -387,6 +387,56 @@ def _write_p1_cif(s, alias: str, path: Path) -> None:
     os.replace(tmp, path)
 
 
+ZEOLITE_DIR = PROJECT_ROOT / "data" / "zeolites"
+
+
+ZEOLITE_PREFIX = "IZA-"  # "IZA-MFI" = the IZA-SC pure-silica MFI framework, data/zeolites/iza/MFI.cif
+
+
+def zeolite_code(name: str) -> str | None:
+    """The IZA framework code if `name` names a downloaded IZA-SC zeolite ("IZA-MFI" -> "MFI")."""
+    if not name.upper().startswith(ZEOLITE_PREFIX):
+        return None
+    code = name[len(ZEOLITE_PREFIX):].upper()
+    return code if re.fullmatch(r"[A-Z]{3}", code) and (ZEOLITE_DIR / "iza" / f"{code}.cif").exists() else None
+
+
+def zeolite_codes() -> list[str]:
+    d = ZEOLITE_DIR / "iza"
+    return sorted(f.stem for f in d.glob("*.cif")) if d.exists() else []
+
+
+def zeolite_cif(name: str) -> Path | None:
+    """A path whose stem is the canonical name (IZA-MFI.cif), symlinked to the IZA file, so
+    describe() names the structure, its RASPA alias and its prepared P1 CIF "IZA-MFI"."""
+    code = zeolite_code(name)
+    if code is None:
+        return None
+    link = ZEOLITE_DIR / "named" / f"{ZEOLITE_PREFIX}{code}.cif"
+    if not link.exists():
+        link.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            link.symlink_to(Path("..") / "iza" / f"{code}.cif")
+        except FileExistsError:
+            pass
+    return link
+
+
+def _load_structure(cif_path):
+    """pymatgen Structure (P1-expanded). IZA-SC zeolite CIFs give coordinates to 4 decimals, so
+    symmetry images of atoms on special positions land ~1e-4 (fractional) apart and pymatgen's
+    default site tolerance keeps both copies (CHA: 132 atoms instead of 108). For those files only,
+    merge with a 1e-3 tolerance (~0.02 A); MOF CIFs keep the default so cached grids stay valid."""
+    from pymatgen.core import Structure
+
+    p = Path(cif_path)
+    if ZEOLITE_DIR in p.parents or ZEOLITE_DIR in p.resolve().parents:
+        from pymatgen.io.cif import CifParser
+
+        return CifParser(str(p), site_tolerance=1e-3).parse_structures(primitive=False)[0]
+    return Structure.from_file(str(p))
+
+
 def describe(cif_path: str | os.PathLike, prepared_dir: str | os.PathLike) -> Descriptors:
     """Tier 0. Pure function of the CIF (plus the CoRE descriptor table); never raises."""
     name = Path(cif_path).stem
@@ -394,11 +444,9 @@ def describe(cif_path: str | os.PathLike, prepared_dir: str | os.PathLike) -> De
     try:
         import warnings
 
-        from pymatgen.core import Structure
-
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            s = Structure.from_file(str(cif_path))
+            s = _load_structure(cif_path)
         if not s.is_ordered:
             raise ValueError("partial occupancies (disordered sites)")
         elements = sorted({site.specie.symbol for site in s})

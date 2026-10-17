@@ -33,7 +33,7 @@ from pathlib import Path
 import numpy as np
 
 from sieve import forcefield
-from sieve.oracle import PROJECT_ROOT, Oracle, bundled_cif_dir, describe, raspa_alias
+from sieve.oracle import PROJECT_ROOT, Oracle, bundled_cif_dir, describe, raspa_alias, zeolite_cif, zeolite_code
 
 SCI_DIR = PROJECT_ROOT / "data" / "science"
 PRESSURES_BAR = (0.05, 0.15, 0.5, 1.0, 2.0, 5.0)
@@ -45,6 +45,11 @@ _lock = threading.Lock()
 
 
 def _cif(name: str) -> Path:
+    """CIF for a structure name: CoRE MOFs in data/cifs, RASPA's bundled references, and IZA-SC
+    zeolites as "IZA-<code>" (data/zeolites/iza/<code>.cif, pure-silica, no cations)."""
+    z = zeolite_cif(name)
+    if z is not None:
+        return z
     for p in (PROJECT_ROOT / "data" / "cifs" / f"{name}.cif", bundled_cif_dir() / f"{name}.cif"):
         if p.exists():
             return p
@@ -145,7 +150,9 @@ def compute(name: str) -> dict:
     alias = raspa_alias(name)
     f = energy_field(name)
     write_cube(SCI_DIR / f"{alias}.cube", f)
-    out = {"name": name, "label": REFERENCES.get(name, name.replace("_clean", "")),
+    code = zeolite_code(name)
+    label = f"{code} zeolite (pure-silica)" if code else REFERENCES.get(name, name.replace("_clean", ""))
+    out = {"name": name, "label": label, **({"zeolite": code} if code else {}),
            "pockets": pocket_stats(f), "isotherm": isotherm(name),
            "metals": f["desc"].metals, "n_atoms": f["desc"].n_atoms,
            "note": "visualization runs, outside every budget; no framework charges in this model"}

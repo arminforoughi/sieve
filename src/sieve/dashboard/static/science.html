@@ -14,7 +14,7 @@
 <main class="page sci">
   <section class="picker card" aria-label="Choose a structure">
     <div class="search">
-      <input type="search" id="q" placeholder="Search 12,020 pool structures by CSD/CoRE name, e.g. ZADREE, QIPROY…" autocomplete="off" spellcheck="false" aria-label="Search structures" aria-controls="results">
+      <input type="search" id="q" placeholder="Search 12,020 pool MOFs by CSD/CoRE name (ZADREE, QIPROY…) or IZA zeolites (IZA-MFI, zeolite CHA)…" autocomplete="off" spellcheck="false" aria-label="Search structures" aria-controls="results">
       <ul id="results" class="results" role="listbox" hidden></ul>
     </div>
     <div class="presets" id="presets" aria-label="Computed structures"></div>
@@ -72,6 +72,7 @@
 
   <section class="card" aria-label="Comparison with reference MOFs">
     <h2>Side by side with reference MOFs <span class="sub">same force field, same protocol; literature values for orientation only</span></h2>
+    <div class="cmp-zeo" id="cmp-zeo"></div>
     <div class="tbl-wrap"><table class="t cmp" id="cmp"></table></div>
   </section>
 
