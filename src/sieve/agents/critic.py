@@ -42,7 +42,8 @@ async def sub_critics(ctx: Ctx, contested: list[dict]) -> list[dict]:
             cred = 0.5 if pred is None else max(0.0, min(1.0, 1 - abs(ev["uptake"] - pred) / max(ev["uptake"], 1e-6)))
             return {"structure": s, "confirm": True, "credibility": cred, "_text": f"{s}: rule-based, confirm"}
 
-        children.append({"id": f"critic/{s.replace('_clean', '')[:16]}", "role": "critic", "model": llm.MODEL_SMALL,
+        children.append({"id": f"critic/{s.replace('_clean', '')[:16]}", "role": "critic",
+                         "model": ctx.models.get("subcritic", llm.MODEL_SMALL),
                          "task": f"examine the lead of {s.replace('_clean', '')}",
                          "extra": "You are a sub-critic examining ONE leading structure measured only at tier 1. "
                                   "Compare its measurement (and error bar) with what similar structures measured "

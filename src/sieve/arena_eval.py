@@ -96,7 +96,8 @@ def run_seeds(arms: list[str], n: int, budget_s: float, start: int = 0) -> list[
     return done
 
 
-VARIANTS = {"sieve": {}, "sieve-v4": {}, "sieve-dsv4": {"orchestrator": "deepseek-ai/DeepSeek-V4-Pro",
+OMNI = "nvidia/Nemotron-3-Nano-Omni-Reasoning-30B-A3B"
+VARIANTS = {"sieve": {}, "sieve-v4": {}, "sieve-v4-omni": {"scout": OMNI, "subcritic": OMNI}, "sieve-dsv4": {"orchestrator": "deepseek-ai/DeepSeek-V4-Pro",
                                         "allocator": "deepseek-ai/DeepSeek-V4-Pro",
                                         "critic": "deepseek-ai/DeepSeek-V4-Pro"}}
 
