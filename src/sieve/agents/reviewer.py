@@ -14,6 +14,11 @@
 The evidence pack is the run's own simulations (energy field, isotherms, references, descriptors,
 measurements). The model has no framework charges, so claims that rest on electrostatics cannot
 be supported by this evidence -- the reviewer is told so explicitly.
+
+Each sub-reviewer also gets the 3 closest worked problems from the Nemotron-Science-v1 library
+(sieve.library, BM25). They are background reasoning, not evidence: synthetic and LLM-written,
+so they can explain a mechanism but never support a number. The ones a reviewer leans on are
+cited on the claim node.
 """
 
 from __future__ import annotations
@@ -54,7 +59,22 @@ EXTRA_SUB = ("You are a sub-reviewer checking ONE scientific claim about a metal
              "or other electrostatics is NOT in the simulation, so such a claim is at best unverifiable here "
              "(and a claim that open metal sites drive the simulated uptake is refuted by the model itself). "
              "If the claim joins several independent assertions (e.g. two causes, or a number and an "
-             "interpretation), put 2-3 short self-contained sub-claims in `split` instead of judging it whole.")
+             "interpretation), put 2-3 short self-contained sub-claims in `split` instead of judging it whole. "
+             "`background_reasoning` holds worked problems from the Nemotron-Science-v1 library: synthetic, "
+             "LLM-written, about other materials. Use them only to judge whether a mechanism is physically "
+             "plausible; they are never evidence for this structure's numbers. List in `cites` the ids you used.")
+
+
+def grounding(claim: str, k: int = 3) -> list[dict]:
+    """Closest Nemotron-Science-v1 passages for a claim; [] if the library is not built."""
+    try:
+        from sieve import library
+        hits = library.search(claim, k=k)
+    except (FileNotFoundError, OSError):
+        return []
+    return [{"id": h["id"], "citation": h["citation"], "score": round(float(h["score"]), 2),
+             "question": h["question"][:300], "excerpt": h["excerpt"][:500], "answer": str(h.get("answer") or "")[:200],
+             "topics": h.get("topics", [])} for h in hits]
 
 # phrases that mark a claim resting on physics this force field does not contain
 ELECTROSTATIC = re.compile(r"\bopen[- ](metal|cu|mg|zn|co|ni|fe|mn)\b|\bunsaturated metal|\boms\b|electrostat|"
@@ -150,24 +170,28 @@ async def check(ctx: Ctx, claim: str, ev: dict, aid: str, parent: str) -> dict:
             split = []
         if v not in VERDICTS and not split:
             raise ValueError("no verdict")
+        cites = {str(x).split("#")[-1].strip() for x in (d.get("cites") or [])}
         return {"verdict": v if v in VERDICTS else "partly", "evidence": str(d.get("evidence", ""))[:500],
-                "split": split,
+                "split": split, "cites": sorted(cites),
                 "_text": f"{v or 'split'}: {claim[:90]}"}
 
     def fallback():
-        return {"verdict": "unverifiable", "evidence": "reviewer unavailable; not checked", "split": [],
+        return {"verdict": "unverifiable", "evidence": "reviewer unavailable; not checked", "split": [], "cites": [],
                 "_text": f"unverifiable (no reviewer): {claim[:80]}"}
 
     leaf = depth >= MAX_DEPTH
-    schema = {"verdict": "|".join(VERDICTS), "evidence": "the numbers you used, one or two sentences"}
+    lib = grounding(claim)
+    schema = {"verdict": "|".join(VERDICTS), "evidence": "the numbers you used, one or two sentences",
+              "cites": ["ids of background_reasoning items you relied on, or []"]}
     if not leaf:
         schema["split"] = ["only if compound: 2-3 independent sub-claims"]
     out, _ = await _step(ctx, "reviewer", f"check: {claim[:80]}",
                         EXTRA_SUB + (" This claim is already a part of a split claim: do NOT split it, judge it." if leaf else ""),
-                        {"claim": claim, "evidence": ev, "answer_schema": schema},
+                        {"claim": claim, "evidence": ev, "background_reasoning": lib, "answer_schema": schema},
                         fallback, validate, agent_id=aid, parent_id=parent, model=llm.MODEL_SMALL,
                         expect=("verdict", "split"))
-    node = {"id": aid, "claim": claim, "verdict": out["verdict"], "evidence": out["evidence"], "children": []}
+    node = {"id": aid, "claim": claim, "verdict": out["verdict"], "evidence": out["evidence"], "children": [],
+            "grounding": [{**g, "used": str(g["id"]) in out["cites"]} for g in lib]}
     if not out["split"] and node["verdict"] == "supported" and electrostatic(claim):
         # guard in code: the model has no framework charges, so it cannot support an electrostatic claim
         node["verdict"] = "unverifiable"

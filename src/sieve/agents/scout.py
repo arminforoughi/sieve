@@ -135,6 +135,21 @@ async def sub_scout(ctx: Ctx, fid: str, parent_id: str) -> None:
             ctx.promise.pop(fid, None)
 
 
+def _priors() -> dict:
+    """Two worked problems from the Nemotron-Science-v1 library on what makes a framework adsorb CO2
+    by dispersion alone (this model's physics). Synthetic background reasoning; contains no labels."""
+    try:
+        from sieve.agents.reviewer import grounding
+        hits = grounding("pore size CO2 physisorption dispersion overlapping wall potentials metal-organic framework uptake", 2)
+    except Exception:  # noqa: BLE001  library absent: scout without it
+        hits = []
+    return {"note": "synthetic worked problems (NVIDIA Nemotron-Science-v1), other materials; priors only",
+            "items": [{k: h[k] for k in ("citation", "question", "answer")} for h in hits]}
+
+
+PRIORS = _priors()
+
+
 async def scout(ctx: Ctx) -> None:
     """Parent scout: choose families to study, spawn a sub-scout per family, merge."""
     ensure_families(ctx)
@@ -155,7 +170,7 @@ async def scout(ctx: Ctx) -> None:
                          "You lead a group of sub-scouts. The pool has been split into families by pore "
                          "geometry. Choose which families (2-5) deserve a dedicated sub-scout now, favouring "
                          "families with strong results AND families nobody has measured yet.",
-                         {"families": cards, "promise_so_far": ctx.promise,
+                         {"families": cards, "promise_so_far": ctx.promise, "background_reasoning": PRIORS,
                           "answer_schema": {"focus": ["family ids"], "headline": "<= 14 words: the bet"}},
                          fallback, validate, expect=("focus",))
     ctx.st.event(ctx.run_id, "delegate", {"role": "scout", "n": len(plan["focus"]), "depth": 1,

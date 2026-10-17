@@ -136,7 +136,7 @@ async def chat(st: Store, run_id: str, agent_id: str, role: str, model: str, sys
                         continue
                     raise LLMError("reply was not JSON")
             return reply
-        except (urllib.error.URLError, TimeoutError, LLMError, KeyError, json.JSONDecodeError) as e:
+        except (OSError, TimeoutError, LLMError, KeyError, json.JSONDecodeError) as e:  # OSError: URLError, ConnectionResetError
             last_err = f"{type(e).__name__}: {e}"
             if attempt == retries:
                 break
