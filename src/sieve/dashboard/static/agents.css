@@ -100,3 +100,15 @@
 }
 .bubble .say { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 .bubble { font-size: 13px; }
+.sat { transform-box: fill-box; transition: opacity 600ms; }
+.sat .sat-ring { fill: var(--panel); stroke: var(--idle); stroke-width: 1.5; }
+.sat .sat-link { stroke: var(--border); stroke-width: 1; stroke-dasharray: 2 3; }
+.sat .sat-label { font: 10px var(--mono); fill: var(--ink-3); }
+.sat.working .sat-ring { stroke: var(--accent); stroke-width: 2.5; animation: ring 1.2s ease-in-out infinite; }
+.sat.failed .sat-ring { stroke: var(--red); stroke-width: 2.5; }
+.sat.recovered .sat-ring { stroke: var(--green); stroke-width: 2.5; }
+.sat.exited { opacity: 0.2; }
+.sat { animation: sat-in 200ms ease-out; }
+@keyframes sat-in { from { opacity: 0; } to { opacity: 1; } }
+.chat li.sub { border-left-style: dotted; padding: 6px 10px; }
+.chat li.sub .text { font-size: 12.5px; }

@@ -72,25 +72,35 @@ def _post(model: str, messages: list[dict], max_tokens: int, timeout: float) -> 
         return json.loads(r.read())
 
 
-def extract_json(text: str) -> dict:
-    """The first JSON object in the text (models sometimes wrap it in prose or fences)."""
+def extract_json(text: str, expect: tuple[str, ...] = ()) -> dict:
+    """The model's answer object. Replies can contain example or draft JSON before the final
+    answer, so take the LAST top-level object that has one of the expected keys (else the last)."""
     text = re.sub(r"```(?:json)?", "", text)
-    start = text.find("{")
-    while start != -1:
-        depth = 0
-        for i in range(start, len(text)):
-            depth += {"{": 1, "}": -1}.get(text[i], 0)
+    found, i = [], 0
+    while (start := text.find("{", i)) != -1:
+        depth, end = 0, None
+        for j in range(start, len(text)):
+            depth += {"{": 1, "}": -1}.get(text[j], 0)
             if depth == 0:
-                try:
-                    return json.loads(text[start:i + 1])
-                except json.JSONDecodeError:
-                    break
-        start = text.find("{", start + 1)
-    raise ValueError("no JSON object in reply")
+                end = j
+                break
+        if end is None:
+            break
+        try:
+            obj = json.loads(text[start:end + 1])
+            if isinstance(obj, dict):
+                found.append(obj)
+            i = end + 1
+        except json.JSONDecodeError:
+            i = start + 1
+    if not found:
+        raise ValueError("no JSON object in reply")
+    keyed = [o for o in found if any(k in o for k in expect)]
+    return (keyed or found)[-1]
 
 
 async def chat(st: Store, run_id: str, agent_id: str, role: str, model: str, system: str,
-               user: str, *, want_json: bool = True, max_tokens: int = 4000,
+               user: str, *, want_json: bool = True, expect: tuple[str, ...] = (), max_tokens: int = 4000,
                retries: int = 4, timeout: float = 180.0, parent_id: str | None = None) -> Reply:
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     st.event(run_id, "agent_tool", {"role": role, "tool": "llm", "model": model,
@@ -117,7 +127,7 @@ async def chat(st: Store, run_id: str, agent_id: str, role: str, model: str, sys
                      agent_id=agent_id, parent_id=parent_id)
             if want_json:
                 try:
-                    reply.data = extract_json(reply.content)
+                    reply.data = extract_json(reply.content, expect)
                 except ValueError:
                     if attempt < retries:  # ask once more, plainly
                         messages = messages + [{"role": "assistant", "content": reply.content[:2000]},

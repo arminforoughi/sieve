@@ -57,6 +57,8 @@ const SENTENCES = {
   agent_fail: (p) => `failed — ${short(p.error || "", 60)}${p.retry ? `, retry ${p.retry}` : ""}`,
   agent_restart: (p) => p.text || "restarted",
   intervention: (p) => `HUMAN: ${p.text || "manual action"}`,
+  delegate: (p) => p.text || `spawning ${p.n} sub-agents`,
+  agent_exit: () => "sub-agent finished",
 };
 function sentence(e) {
   const f = SENTENCES[e.type];
@@ -70,7 +72,7 @@ const VERBS = {
   budget_refused: ["skip", ""], worker_dead: ["DEAD", "bad"], worker_restart: ["restart", "good"],
   decision: ["decide", "decision"], veto: ["veto", "veto"], promote: ["promote", "decision"], recommend: ["pick", "decision"],
   agent_start: ["start", ""], agent_finish: ["finish", ""], agent_fail: ["fail", "bad"], agent_restart: ["restart", "good"],
-  agent_tool: ["tool", ""], intervention: ["HUMAN", "bad"],
+  agent_tool: ["tool", ""], intervention: ["HUMAN", "bad"], delegate: ["spawn", "decision"], agent_exit: ["exit", ""],
 };
 const FILTERS = {
   all: (e) => e.type !== "task_start" && e.type !== "worker_start",  // starts are visible in the worker strip

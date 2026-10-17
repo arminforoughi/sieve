@@ -96,7 +96,12 @@ def run_seeds(arms: list[str], n: int, budget_s: float, start: int = 0) -> list[
     return done
 
 
-def run_sieve_seeds(n: int, budget_s: float, start: int = 0, parallel: int = 5) -> list[str]:
+VARIANTS = {"sieve": {}, "sieve-v4": {}, "sieve-dsv4": {"orchestrator": "deepseek-ai/DeepSeek-V4-Pro",
+                                        "allocator": "deepseek-ai/DeepSeek-V4-Pro",
+                                        "critic": "deepseek-ai/DeepSeek-V4-Pro"}}
+
+
+def run_sieve_seeds(n: int, budget_s: float, start: int = 0, parallel: int = 5, arm: str = "sieve") -> list[str]:
     """SIEVE replay seeds. Model calls dominate wall time, so several seeds run concurrently."""
     import asyncio
 
@@ -108,7 +113,7 @@ def run_sieve_seeds(n: int, budget_s: float, start: int = 0, parallel: int = 5) 
     st = Store(REPLAY_DB)
     todo = []
     for seed in range(start, start + n):
-        rid = f"sieve-replay-s{seed}"
+        rid = f"{arm}-replay-s{seed}"
         row = st.con.execute("SELECT status FROM runs WHERE run_id=?", (rid,)).fetchone()
         if not (row and row[0] == "finished"):
             todo.append((seed, rid))
@@ -120,7 +125,7 @@ def run_sieve_seeds(n: int, budget_s: float, start: int = 0, parallel: int = 5) 
             async with sem:
                 try:
                     return await run_team(str(REPLAY_DB), budget_s, 1, seed, run_id=rid, cost_model=model,
-                                          candidates=arena,
+                                          candidates=arena, arm=arm, models=VARIANTS[arm],
                                           replay={"truth_db": str(ARENA_DB), "seed": seed, "noise": asdict(noise)})
                 except Exception as e:  # one failed seed must not stop the others
                     print(f"{rid} failed: {type(e).__name__}: {e}", flush=True)
@@ -156,9 +161,9 @@ def main() -> None:
         print(calibrate())
     elif a.cmd == "seeds":
         arms = a.arms.split(",")
-        if "sieve" in arms:
-            print(run_sieve_seeds(a.n, a.budget_h * 3600, a.start, a.parallel))
-        rest = [x for x in arms if x != "sieve"]
+        for v in [x for x in arms if x in VARIANTS]:
+            print(run_sieve_seeds(a.n, a.budget_h * 3600, a.start, a.parallel, v))
+        rest = [x for x in arms if x not in VARIANTS]
         if rest:
             print(run_seeds(rest, a.n, a.budget_h * 3600, a.start))
     else:

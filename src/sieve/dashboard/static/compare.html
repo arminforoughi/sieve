@@ -38,15 +38,15 @@
 const $ = (id) => document.getElementById(id);
 const pct = (x) => `${Math.round(100 * x)}%`;
 let data, sel;
-const LABEL = { random: "random", descriptor: "descriptor-ranked", uniform: "uniform tier-2", sieve: "SIEVE (agents)" };
+const LABEL = { random: "random", descriptor: "descriptor-ranked", uniform: "uniform tier-2", sieve: "SIEVE v3 (Nemotron Super/Nano)", "sieve-dsv4": "SIEVE v3 (DeepSeek-V4-Pro planner)", "sieve-v4": "SIEVE v4 (sub-agents, Nemotron)" };
 function render() {
-  const arms = Object.keys(data.arms).sort((a, b) => (a === "sieve") - (b === "sieve"));
+  const arms = Object.keys(data.arms).sort((a, b) => a.startsWith("sieve") - b.startsWith("sieve"));
   const col = (k) => Math.max(...arms.map((a) => { const m = data.arms[a].budgets[sel]; return m ? (m[k].median ?? m[k]) : -1; }));
   const bestF = col("best_true_found"), bestR = col("recommended_true");
   $("rows").innerHTML = arms.map((a) => {
     const m = data.arms[a].budgets[sel]; if (!m) return "";
     const q = (x, d = 3) => `${x.median.toFixed(d)} <span class="iqr">[${x.p25.toFixed(2)}–${x.p75.toFixed(2)}]</span>`;
-    return `<tr class="${a === "sieve" ? "sieve" : ""}"><td>${LABEL[a] || a} <span class="iqr">n=${m.n}</span></td>
+    return `<tr class="${a.startsWith("sieve") ? "sieve" : ""}"><td>${LABEL[a] || a} <span class="iqr">n=${m.n}</span></td>
       <td class="num ${m.best_true_found.median === bestF ? "best" : ""}">${q(m.best_true_found)}</td>
       <td class="num ${m.recommended_true.median === bestR ? "best" : ""}">${q(m.recommended_true)}</td>
       <td class="num">${pct(m.decile_recall.median)}</td>

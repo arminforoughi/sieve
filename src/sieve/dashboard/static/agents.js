@@ -20,7 +20,7 @@ const WORKER_Y = 530, POOL = { x0: 40, x1: 320, y0: 395, y1: 480 };
 // speech-bubble slots in stage coordinates, chosen so no two overlap each other or a node
 const SLOTS = { orchestrator: { x: 565, y: 18, w: 330, h: 104 }, scout: { x: 14, y: 300, w: 290, h: 84 },
   allocator: { x: 690, y: 300, w: 300, h: 104 }, critic: { x: 360, y: 395, w: 290, h: 86 } };
-const S = { bubbles: {}, run: null, speed: 1, workers: {}, nodes: {}, edges: {}, best: -1, measured: {}, vetoed: {}, rounds: {}, curRound: null,
+const S = { sats: {}, satCount: {}, bubbles: {}, run: null, speed: 1, workers: {}, nodes: {}, edges: {}, best: -1, measured: {}, vetoed: {}, rounds: {}, curRound: null,
   queue: [], busy: false, poolPts: [], poolByName: {}, live: false, lastToast: 0 };
 
 // ------------------------------------------------------------------------------------ stage
@@ -48,16 +48,39 @@ function buildStage() {
     el("text", { class: "model", y: 86, "text-anchor": "middle" }, g).textContent = n.model;
     S.nodes[k] = g;
   }
+  S.satG = el("g", {}, svg);
   S.fx = el("g", {}, svg);
-  S.bubbles = {};
+  S.bubbles = {}; S.sats = {}; S.satCount = {};
   drawPool();
 }
+
+// sub-agents: small nodes orbiting their parent; they scale in, pulse while working, fade on exit
+const SAT_ANGLES = { orchestrator: [200, 340], scout: [-60, 260], allocator: [-120, 80], critic: [200, 340] };
+function satellite(id) {
+  if (S.sats[id]) return S.sats[id];
+  const parts = id.split("/"), parentId = parts.slice(0, -1).join("/"), top = parts[0];
+  const parent = S.sats[parentId] || (NODES[top] ? { x: NODES[top].x, y: NODES[top].y } : { x: 500, y: 300 });
+  const depth = parts.length - 1;
+  const k = (S.satCount[parentId] = (S.satCount[parentId] || 0) + 1) - 1;
+  const [a0, a1] = SAT_ANGLES[top] || [0, 360];
+  const ang = ((a0 + ((a1 - a0) * ((k % 6) + 0.5)) / 6) * Math.PI) / 180;
+  const r = depth === 1 ? 92 + 16 * Math.floor(k / 6) : 48;
+  const x = parent.x + r * Math.cos(ang), y = parent.y + r * Math.sin(ang);
+  const g = el("g", { class: "sat working", transform: `translate(${x},${y})` }, S.satG);
+  el("line", { x1: 0, y1: 0, x2: parent.x - x, y2: parent.y - y, class: "sat-link" }, g);
+  el("circle", { r: depth === 1 ? 15 : 11, class: "sat-ring" }, g);
+  const t = el("text", { y: depth === 1 ? 28 : 22, "text-anchor": "middle", class: "sat-label" }, g);
+  t.textContent = parts[parts.length - 1].slice(0, 14);
+  return (S.sats[id] = { g, x, y });
+}
+function setSat(id, state) { const s = satellite(id); s.g.setAttribute("class", `sat ${state}`); }
 
 function setNode(role, state) { const g = S.nodes[role]; if (g) g.setAttribute("class", `agent-node ${state}`); }
 function flash(edge) { const e = S.edges[edge]; if (!e) return; e.classList.add("hot"); setTimeout(() => e.classList.remove("hot"), 700); }
 
 function pt(id) {  // a point in stage coordinates
   if (NODES[id]) return { x: NODES[id].x, y: NODES[id].y };
+  if (S.sats[id]) return { x: S.sats[id].x, y: S.sats[id].y };
   if (id === "workers") return { x: 500, y: WORKER_Y };
   if (S.workers[id]) return { x: S.workers[id].x, y: WORKER_Y };
   return { x: 500, y: 300 };
@@ -157,7 +180,27 @@ function setWorker(id, state, text) {
 // ---------------------------------------------------------------------------- event actions
 function act(e, animate) {
   const p = e.p || {}, role = p.role || e.agent;
+  const sub = e.agent && e.agent.includes("/") ? e.agent : null;
+  if (sub) {
+    const parentId = e.parent || sub.split("/").slice(0, -1).join("/");
+    switch (e.type) {
+      case "agent_start": setSat(sub, "working"); if (animate) fly(parentId, sub, "task", 450); break;
+      case "agent_finish": setSat(sub, "idle"); if (animate) fly(sub, parentId, "answer", 450); chat(e); break;
+      case "agent_fail": setSat(sub, "failed"); chat(e); break;
+      case "agent_restart": setSat(sub, "recovered"); chat(e); break;
+      case "agent_exit": setSat(sub, "exited"); break;
+      case "delegate": if (animate) bubble(sub.split("/")[0], p.text || "spawning sub-agents"); chat(e); break;
+      default:
+    }
+    return;
+  }
   switch (e.type) {
+    case "delegate":
+      if (animate) { bubble(role, p.text || "spawning sub-agents"); burst(NODES[role] ? NODES[role].x : 500, NODES[role] ? NODES[role].y : 300); }
+      chat(e);
+      break;
+    case "agent_exit":
+      break;
     case "agent_start":
       setNode(role, "working");
       if (animate) { if (role !== "orchestrator") { fly("orchestrator", role, "task"); flash(role); } bubble(role, `${p.text || "thinking"}…`, "thinking"); }
@@ -245,11 +288,12 @@ function drain() {
 
 // ------------------------------------------------------------------------------------ chat
 function chat(e) {
-  const p = e.p || {}, role = p.role || e.agent || "orchestrator";
+  const p = e.p || {}, role = (e.agent && e.agent.includes("/")) ? e.agent : (p.role || e.agent || "orchestrator");
   const li = document.createElement("li");
+  if (role.includes("/")) li.style.marginLeft = `${16 * (role.split("/").length - 1)}px`;
   const kind = e.type === "agent_fail" ? "fail" : e.type === "recommend" ? "win" : role;
-  li.className = `r-${kind}`;
-  const to = e.type === "veto" ? "→ orchestrator" : role === "orchestrator" ? "→ team" : "→ orchestrator";
+  li.className = `r-${kind.split("/")[0]}${role.includes("/") ? " sub" : ""}`;
+  const to = role.includes("/") ? `→ ${e.parent || role.split("/").slice(0, -1).join("/")}` : e.type === "delegate" ? "→ sub-agents" : e.type === "veto" ? "→ orchestrator" : role === "orchestrator" ? "→ team" : "→ orchestrator";
   let body = `<div class="text">${esc(p.text || (e.type === "agent_fail" ? `call failed: ${p.error}` : e.type))}</div>`;
   const d = p.decision || {};
   if (d.jobs) body += `<div class="jobs">${d.jobs.map((j) => `<span class="${j.tier === 2 ? "t2" : ""}" title="${esc(j.why)}">T${j.tier} ${esc(name(j.structure))}</span>`).join("")}</div>`;
@@ -338,6 +382,7 @@ async function boot() {
   es.addEventListener("frame", (m) => frame(JSON.parse(m.data)));
   es.addEventListener("events", (m) => {
     const evs = JSON.parse(m.data).filter((e) => e.type !== "worker_start" && e.type !== "llm_usage" && e.type !== "agent_tool");
+    for (const e of evs) if (e.type === "delegate") e.p.role = e.p.role || (e.agent || "").split("/")[0];
     enqueue(evs, !first); first = false;
   });
 }
