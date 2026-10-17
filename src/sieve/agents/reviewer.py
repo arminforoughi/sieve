@@ -99,7 +99,8 @@ def evidence_pack(name: str, analyst: dict | None) -> dict:
 
     # cached() only: science.get() would start a RASPA computation in this process
     sci = science.cached(name) or {}
-    brief = lambda d: {"isotherm": d["isotherm"], "pockets": {k: v for k, v in d["pockets"].items() if k != "hist"}}  # noqa: E731
+    brief = lambda d: {"isotherm": d["isotherm"], "pockets": {k: v for k, v in d["pockets"].items() if k != "hist"},  # noqa: E731
+                       **({"capture": capture(d["props"])} if d.get("props") else {})}
     refs = {science.REFERENCES[r]: brief(d) for r in science.REFERENCES if r != name and (d := science.cached(r))}
     typ_f = PROJECT_ROOT / "data" / "science-typical.txt"
     typ_name = typ_f.read_text().strip() if typ_f.exists() else None
@@ -120,10 +121,28 @@ def evidence_pack(name: str, analyst: dict | None) -> dict:
             "isotherm_298K": sci.get("isotherm"),
             "isotherm_meaning": ("GCMC uptake (mol/kg = mmol/g) at 298 K vs CO2 pressure in bar, 500 production cycles per "
                                  "point (error bars given), run for this page; NOT a screening tier. 0.15 bar = flue gas"),
+            "capture_performance": capture(sci.get("props")),
+            "capture_meaning": ("flue-gas capture metrics from separate GCMC runs (same force field): selectivity = "
+                                "CO2/N2 adsorption selectivity from a 15:85 mixture at 1 bar, 298 K; wc_* = working "
+                                "capacity in mol/kg for a vacuum swing (0.15 -> 0.01 bar), the same from the mixture, and "
+                                "a temperature swing (298 -> 393 K at 0.15 bar); qst = heat of adsorption at infinite "
+                                "dilution (Widom), kJ/mol; k_h = Henry constant mol/kg/bar. No charges: selectivity and "
+                                "qst of open-metal-site frameworks are underestimated."),
             "context": CONTEXT.get(name), "typical_structure": typ, "references": refs,
             "best_pool_structure": {"name": POOL_BEST, **best} if best else None,
             "model": "UFF framework LJ + TraPPE CO2, rigid, NO framework charges; uptake = absolute loading",
             "analyst_writeup": analyst}
+
+
+def capture(props: dict | None) -> dict | None:
+    """The capture metrics, compact, for the evidence pack (None until computed)."""
+    if not props:
+        return None
+    v = lambda d: None if not d or d.get("value") is None else (round(d["value"], 3), round(d.get("err") or 0, 3))  # noqa: E731
+    wc, q = props.get("wc") or {}, props.get("qst") or {}
+    return {"selectivity": v(props.get("selectivity")), "wc_vsa": v(wc.get("vsa")), "wc_mixture": v(wc.get("mixture")),
+            "wc_tsa": v(wc.get("tsa")), "qst_kjmol": v(q.get("widom")),
+            "k_h_co2": v((props.get("k_h") or {}).get("CO2")), "note": "(value, error)"}
 
 
 def page_claims(name: str, ev: dict) -> list[str]:
@@ -142,6 +161,21 @@ def page_claims(name: str, ev: dict) -> list[str]:
         r = at(d["isotherm"], 0.15)
         if u and r:
             out.append(f"{name} adsorbs {'more' if u > r else 'less'} CO2 than {ref} at 0.15 bar ({u:.2f} vs {r:.2f} mol/kg).")
+    # the capture tiles on the Science page make claims too
+    cap = ev.get("capture_performance") or {}
+    for ref, d in (ev.get("references") or {}).items():
+        rc = d.get("capture") or {}
+        if cap.get("selectivity") and rc.get("selectivity"):
+            a, b = cap["selectivity"][0], rc["selectivity"][0]
+            out.append(f"{name} separates CO2 from N2 {'better' if a > b else 'worse'} than {ref} "
+                       f"(CO2/N2 selectivity {a:.1f} vs {b:.1f}).")
+        if cap.get("wc_tsa") and rc.get("wc_tsa"):
+            a, b = cap["wc_tsa"][0], rc["wc_tsa"][0]
+            out.append(f"In a temperature-swing cycle {name} delivers {a / b:.1f}x the CO2 of {ref} per kg "
+                       f"({a:.2f} vs {b:.2f} mol/kg).")
+    if cap.get("qst_kjmol") and cap.get("selectivity"):
+        out.append(f"{name}'s heat of adsorption ({cap['qst_kjmol'][0]:.1f} kJ/mol) is low enough for cheap "
+                   f"regeneration while still giving a CO2/N2 selectivity of {cap['selectivity'][0]:.0f}.")
     return out
 
 
