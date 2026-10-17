@@ -5,6 +5,7 @@
 // #run-select and #replay straight away. Shell.setRun(id) keeps ?run= on every nav link.
 (function () {
   const PAGES = [
+    ["workflow", "/how", "How it works"],
     ["room", "/", "Control room"],
     ["agents", "/agents", "Agents"],
     ["discoveries", "/discoveries", "Discoveries"],
@@ -12,7 +13,7 @@
     ["compare", "/compare", "Compare"],
     ["guide", "/guide", "How to use"],
   ];
-  const RUN_PAGES = new Set(["room", "agents", "discoveries"]);
+  const RUN_PAGES = new Set(["workflow", "room", "agents", "discoveries"]);
   const host = document.querySelector("header.shell");
   if (!host) return;
   const page = host.dataset.page;

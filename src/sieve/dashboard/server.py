@@ -702,6 +702,15 @@ def create_app(db: str, replay_run: str | None = None) -> FastAPI:
     def guide_page():
         return page("guide.html")
 
+    @app.get("/how")
+    def workflow_page():
+        return page("workflow.html")
+
+    @app.get("/api/workflow")
+    def api_workflow(run: str | None = None):  # the agent workflow with live counts for one run
+        from sieve.dashboard.workflow import workflow
+        return workflow(db, run)
+
     @app.get("/api/search")
     def api_search(q: str = "", limit: int = 30):
         return search(q, min(limit, 100))

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SIEVE · How it works</title>
+<link rel="stylesheet" href="/static/shell.css">
+<link rel="stylesheet" href="/static/workflow.css">
+</head>
+<body>
+<header class="shell" data-page="workflow" data-runs></header>
+<script src="/static/shell.js"></script>
+<main class="page wf">
+  <div class="page-head"><div>
+    <h1>How SIEVE works</h1>
+    <p class="lead">A team of AI agents decides which of 8,803 MOFs to simulate, and how carefully, on a fixed
+      4 CPU-hour budget. Independent checks then decide whether to believe the answer.</p>
+  </div></div>
+
+  <div class="wf-run" id="wf-run"><span class="spin"></span> Loading…</div>
+
+  <section class="card wf-flow" aria-label="Screening workflow">
+    <h2>1 · Screen <span class="sub">agents choose what to simulate; one round at a time until the budget is spent</span></h2>
+    <div class="wf-loop" aria-hidden="true"><span>repeats every round</span></div>
+    <ol class="wf-steps" id="wf-steps"></ol>
+  </section>
+
+  <section class="card wf-flow" aria-label="Verification">
+    <h2>2 · Verify <span class="sub">nothing is believed until it survives these, and none of them is the agent that made the claim</span></h2>
+    <ol class="wf-steps wf-verify" id="wf-verify"></ol>
+  </section>
+
+  <section class="card" aria-label="Rules">
+    <h2>The rules that keep it honest</h2>
+    <ul class="wf-rules">
+      <li><b>Cheap runs only rank.</b> Tier-1 simulations are short and unconverged (±18%). They decide what to look at, never what wins.</li>
+      <li><b>A winner needs a confirmed run.</b> The critic vetoes any structure without a tier-2 simulation (±8.6%).</li>
+      <li><b>No AI sees the answers.</b> Agents see only descriptors and their own measurements, never ground truth.</li>
+      <li><b>Every claim is checked against data.</b> The peer reviewer splits compound claims and judges each part. Claims the model cannot test (charges, open metal sites) are never marked supported.</li>
+      <li><b>Losses are reported.</b> When a baseline beats SIEVE, the Compare page says so first.</li>
+      <li><b>Crashes are normal.</b> Every job and decision is in a database, so <code>python -m sieve resume</code> continues after a kill -9.</li>
+    </ul>
+  </section>
+</main>
+<script src="/static/workflow.js"></script>
+</body>
+</html>
