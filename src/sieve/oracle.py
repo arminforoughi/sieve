@@ -536,6 +536,13 @@ class Oracle:
         est = grid if mode == "grid" else direct
         return Plan(mode, mode == "grid" and not cached, est, direct, grid)
 
+    def cpu_limit(self, plan: Plan, tier: int) -> float:
+        """Default per-evaluation CPU limit: 4x the estimate within the tier's bounds, and never
+        more than what is left (concurrent jobs can still overrun their estimates, so a run can
+        end slightly over budget; the ledger reports it exactly)."""
+        limit = min(TIERS[tier].max_timeout_s, max(30.0, TIMEOUT_FACTOR * plan.est_cpu_s))
+        return max(1.0, min(limit, self.remaining()))
+
     # -- tier 0 -----------------------------------------------------------------------------
 
     def tier0(self, cif_path: str | os.PathLike, worker_id: str | None = None) -> Descriptors:
@@ -629,10 +636,7 @@ class Oracle:
             uptake_hint = self.known_uptake(desc.structure)
         plan = self.plan(desc, tier, mode, model, uptake_hint)
         if timeout_s is None:
-            timeout_s = min(t.max_timeout_s, max(30.0, TIMEOUT_FACTOR * plan.est_cpu_s))
-        # never let one job spend more than what is left (concurrent jobs can still overrun
-        # their estimates, so a run can end slightly over budget; the ledger reports it exactly)
-        timeout_s = max(1.0, min(timeout_s, self.remaining()))
+            timeout_s = self.cpu_limit(plan, tier)
         eval_id = self._reserve(desc.structure, tier, plan.mode, plan.est_cpu_s, timeout_s,
                                 worker_id)
         t0 = time.time()

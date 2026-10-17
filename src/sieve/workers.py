@@ -93,9 +93,13 @@ def worker_main(cfg: WorkerConfig, worker_id: str, stop: mp.Event) -> None:
                                                     "error": desc.error}, agent_id=worker_id)
                 continue
             plan = o.plan(desc, tier, task["mode"], cfg.cost_model)
+            if o.remaining() < plan.est_cpu_s:
+                raise BudgetExhausted(f"{s} tier {tier}: needs ~{plan.est_cpu_s:.0f}s, "
+                                      f"{o.remaining():.0f}s left")
             st.event(cfg.run_id, "task_start", {
                 "task": tid, "structure": s, "tier": tier, "mode": plan.mode,
                 "est_cpu_s": round(plan.est_cpu_s, 1), "build_grid": plan.build_grid,
+                "limit_cpu_s": round(o.cpu_limit(plan, tier), 1),
                 "n_atoms_sim": desc.n_atoms_sim}, agent_id=worker_id)
             ev = o.simulate(desc, tier, task["mode"], worker_id=worker_id,
                             cost_model=cfg.cost_model)

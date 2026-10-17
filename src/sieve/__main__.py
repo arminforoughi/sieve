@@ -3,6 +3,7 @@
   baseline <random|descriptor|uniform> [--budget-h 4] [--workers N] [--seed 0] [--limit N]
   resume <run_id>          continue a run from its last committed state
   status [run_id]          budget, rounds, evaluations by tier, timeouts
+  dashboard [--port 8770] [--demo-replay RUN_ID]
 """
 
 from __future__ import annotations
@@ -67,6 +68,14 @@ def cmd_status(a) -> None:
             print(f"    {e.structure:40s} {e.uptake:7.3f} +/- {e.err:.3f} mol/kg  (tier {e.tier})")
 
 
+def cmd_dashboard(a) -> None:
+    from sieve.dashboard.server import serve
+
+    print(f"SIEVE dashboard on http://127.0.0.1:{a.port}  (db {a.db})"
+          + (f"  replaying {a.demo_replay} at 20x" if a.demo_replay else ""))
+    serve(a.db, a.port, a.demo_replay)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="sieve")
     p.add_argument("--db", default=DEFAULT_DB)
@@ -86,6 +95,10 @@ def main() -> None:
     s = sub.add_parser("status")
     s.add_argument("run_id", nargs="?")
     s.set_defaults(fn=cmd_status)
+    d = sub.add_parser("dashboard")
+    d.add_argument("--port", type=int, default=8770)
+    d.add_argument("--demo-replay", default=None, metavar="RUN_ID")
+    d.set_defaults(fn=cmd_dashboard)
     a = p.parse_args()
     a.fn(a)
 
