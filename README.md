@@ -1,5 +1,7 @@
 # SIEVE
 
+**System map:** agents, models, methods, data and tests in one page: [docs/OVERVIEW.md](docs/OVERVIEW.md).
+
 A fault-tolerant, multi-fidelity screen of metal-organic frameworks for CO2 capture under a fixed
 compute budget. It ranks CoRE MOF 2019 structures by simulated CO2 uptake at 298 K and 1 bar, and
 spends GCMC time where it can change the answer instead of everywhere.
