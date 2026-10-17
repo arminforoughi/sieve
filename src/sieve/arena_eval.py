@@ -102,6 +102,11 @@ VARIANTS = {"sieve": {}, "sieve-v4": {}, "sieve-v4-omni": {"scout": OMNI, "subcr
                                         "critic": "deepseek-ai/DeepSeek-V4-Pro"}}
 
 
+# search-policy variants (same models as v4)
+POLICIES = {"sieve-v5": {"upside": True, "random_frac": 0.10, "promise_floor": 0.15}}
+VARIANTS["sieve-v5"] = {}
+
+
 def run_sieve_seeds(n: int, budget_s: float, start: int = 0, parallel: int = 5, arm: str = "sieve") -> list[str]:
     """SIEVE replay seeds. Model calls dominate wall time, so several seeds run concurrently."""
     import asyncio
@@ -126,7 +131,7 @@ def run_sieve_seeds(n: int, budget_s: float, start: int = 0, parallel: int = 5, 
             async with sem:
                 try:
                     return await run_team(str(REPLAY_DB), budget_s, 1, seed, run_id=rid, cost_model=model,
-                                          candidates=arena, arm=arm, models=VARIANTS[arm],
+                                          candidates=arena, arm=arm, models=VARIANTS[arm], policy=POLICIES.get(arm),
                                           replay={"truth_db": str(ARENA_DB), "seed": seed, "noise": asdict(noise)})
                 except Exception as e:  # one failed seed must not stop the others
                     print(f"{rid} failed: {type(e).__name__}: {e}", flush=True)

@@ -64,6 +64,9 @@ class Ctx:
     cap_atoms: int | None = None
     critic_notes: str = ""
     round: int = 0
+    # search policy knobs (v5): {"upside": bool, "random_frac": float, "promise_floor": float}
+    policy: dict = field(default_factory=dict)
+    random_debt: float = 0.0
 
 
 # --------------------------------------------------------------------------------- one step

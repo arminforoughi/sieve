@@ -9,9 +9,39 @@ worker idles.
 
 from __future__ import annotations
 
-from sieve.agents.base import Ctx, already, budget, explore_phase, fix_name, leaders, step
+from sieve.agents.base import Ctx, affordable_t1, already, budget, explore_phase, fix_name, leaders, step
 from sieve.agents.scout import shortlist
 from sieve.agents.world import costs
+
+
+def random_slice(ctx: Ctx, jobs: list[dict]) -> list[dict]:
+    """v5 exploration floor: a fixed share of each round's tier-1 jobs goes to structures drawn
+    uniformly from the whole unmeasured pool, replacing the lowest-priority picks (top-ups first,
+    then the allocator's last). Whatever the agents believe, SIEVE keeps random search's luck.
+    A running fraction (random_debt) keeps the share exact even when rounds are small."""
+    frac = ctx.policy.get("random_frac", 0.0)
+    t1 = [j for j in jobs if j["tier"] == 1]
+    if frac <= 0 or not t1:
+        return jobs
+    ctx.random_debt += frac * len(t1)
+    k = int(ctx.random_debt)
+    if not k:
+        return jobs
+    w, limit = ctx.world, affordable_t1(ctx)
+    taken = {j["structure"] for j in jobs}
+    pool = [s for s in w.names if s not in taken and not already(ctx, s, 1)
+            and w.desc[s].n_atoms_sim <= min(6000, ctx.cap_atoms or 6000)]
+    picks = []
+    for s in ctx.rng.sample(pool, min(len(pool), 8 * k)):
+        if len(picks) == k:
+            break
+        c = costs(ctx.oracle, w, s, ctx.cost_model)[1]
+        if c <= limit:
+            picks.append({"structure": s, "tier": 1, "why": "random slice: exploration floor (v5)", "est_cpu_s": c})
+    ctx.random_debt -= len(picks)
+    drop = sorted(range(len(jobs)), key=lambda i: (jobs[i]["tier"] != 1, not jobs[i]["why"].startswith("top-up"), -i))
+    drop = set([i for i in drop if jobs[i]["tier"] == 1][:len(picks)])
+    return [j for i, j in enumerate(jobs) if i not in drop] + picks
 
 
 async def allocate(ctx: Ctx, plan: dict) -> list[dict]:
@@ -81,6 +111,11 @@ async def allocate(ctx: Ctx, plan: dict) -> list[dict]:
                          "answer_schema": {"jobs": [{"structure": "name", "tier": "1 or 2", "why": "short"}],
                                            "summary": "one sentence"}},
                         fallback, validate, expect=("jobs",))
+    out["jobs"] = random_slice(ctx, out["jobs"])
+    if any(j["why"].startswith("random slice") for j in out["jobs"]):
+        rs = [j["structure"] for j in out["jobs"] if j["why"].startswith("random slice")]
+        ctx.st.event(ctx.run_id, "decision", {"text": f"random slice: {len(rs)} uniform pick(s) — "
+                                                      + ", ".join(s.replace("_clean", "") for s in rs)}, agent_id="allocator")
     promoted = [j for j in out["jobs"] if j["tier"] == 2]
     if promoted:
         ctx.st.event(ctx.run_id, "promote", {"n": len(promoted), "tier": 2, "structures": [j["structure"] for j in promoted],

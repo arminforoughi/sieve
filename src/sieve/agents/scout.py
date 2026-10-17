@@ -48,7 +48,27 @@ def family_card(ctx: Ctx, fid: str, members: list[int]) -> dict:
             "open_metal_fraction": round(float(np.mean([w.oms[i] for i in members])), 2),
             "common_metals": [m for m, _ in sorted(metals.items(), key=lambda kv: -kv[1])[:5]],
             "measured": len(meas), "best_measured": [{"structure": s, "uptake": round(u, 2)} for u, s in meas[:3]],
-            "worst_measured": [{"structure": s, "uptake": round(u, 2)} for u, s in meas[-2:]] if len(meas) > 3 else []}
+            "worst_measured": [{"structure": s, "uptake": round(u, 2)} for u, s in meas[-2:]] if len(meas) > 3 else [],
+            **({"measured_spread": round(float(np.std([u for u, _ in meas])), 2)} if len(meas) >= 2 else {})}
+
+
+def upside_promise(ctx: Ctx, fid: str, llm_promise: float) -> float:
+    """v5: the goal is the single best structure, so a family is judged by its upside, not its
+    typical member. Promise = max(the scout's view, an optimistic bound from the family's own
+    measurements relative to the run's best), floored so no family's quota ever collapses."""
+    pol = ctx.policy
+    if not pol.get("upside"):
+        return llm_promise
+    est = measured_estimates(ctx.st, ctx.run_id)
+    w = ctx.world
+    up = [est[w.names[i]].uptake for i in ctx.families[fid] if w.names[i] in est]
+    best = max((e.uptake for e in est.values() if e.tier > 0), default=0.0)
+    if len(up) < 3 or best <= 0:
+        opt = 0.6  # barely measured: optimism under uncertainty
+    else:
+        # optimistic bound on the family's top: its best plus one spread, against the run's best
+        opt = min(1.0, (max(up) + float(np.std(up))) / best)
+    return max(pol.get("promise_floor", 0.15), llm_promise, opt)
 
 
 def ensure_families(ctx: Ctx) -> None:
@@ -75,6 +95,9 @@ SUB_EXTRA = ("You are a sub-scout responsible for ONE family of structures. Read
              "choosing structures WITHIN this family, and rate how promising the family is (0..1) given "
              "the measurements so far -- data beats textbook priors. If the family looks like two "
              "different kinds of structure mixed together, set split=true.")
+UPSIDE_NOTE = (" The team is looking for the single BEST structure, not a good family on average: rate promise by "
+               "the chance the family holds a top performer. A family with a poor median but a wide spread "
+               "(measured_spread) or few measurements can still be very promising.")
 SUB_SCHEMA = {"lcd_target": "A", "lcd_width": "A", "w_lcd": "weight", "w_void": "weight (z)",
               "w_area": "weight (z)", "w_pld": "weight (z)", "w_oms": "bonus", "metal_bonus": "{element: weight}",
               "promise": "0..1", "split": "bool", "headline": "<= 12 words"}
@@ -98,11 +121,12 @@ async def sub_scout(ctx: Ctx, fid: str, parent_id: str) -> None:
         p = 0.5 if not best else min(1.0, best[0]["uptake"] / 6.0)
         return {**base_rule, "promise": p, "split": False, "_text": f"{fid}: rule-based, promise {p:.2f}"}
 
-    out, _ = await step(ctx, "scout", f"scout family {fid} ({card['n']} structures)", SUB_EXTRA,
+    extra = SUB_EXTRA + (UPSIDE_NOTE if ctx.policy.get("upside") else "")
+    out, _ = await step(ctx, "scout", f"scout family {fid} ({card['n']} structures)", extra,
                         {"family": card, "current_rule": base_rule, "answer_schema": SUB_SCHEMA},
                         fallback, validate, agent_id=aid, parent_id=parent_id, expect=("promise", "lcd_target"))
     ctx.rules[fid] = {k: v for k, v in out.items() if k in RULE_KEYS or k == "metal_bonus"}
-    ctx.promise[fid] = out["promise"]
+    ctx.promise[fid] = upside_promise(ctx, fid, out["promise"])
     if out["split"] and aid.count("/") < MAX_DEPTH and len(members) >= 300:
         halves = kmeans(ctx.world.X, members, 2, seed=ctx.round)
         if len(halves) == 2:
@@ -122,7 +146,7 @@ async def sub_scout(ctx: Ctx, fid: str, parent_id: str) -> None:
                     return v
 
                 children.append({"id": f"{aid}/{sid}", "role": "scout", "task": f"scout sub-family {sid} ({len(mem)})",
-                                 "extra": SUB_EXTRA, "user": {"family": scard, "parent_rule": ctx.rules[fid],
+                                 "extra": SUB_EXTRA + (UPSIDE_NOTE if ctx.policy.get("upside") else ""), "user": {"family": scard, "parent_rule": ctx.rules[fid],
                                                               "answer_schema": SUB_SCHEMA},
                                  "fallback": (lambda sid=sid: {**ctx.rules[sid], "promise": ctx.promise.get(fid, 0.5),
                                                                "_text": f"{sid}: inherited parent rule"}),
@@ -130,7 +154,7 @@ async def sub_scout(ctx: Ctx, fid: str, parent_id: str) -> None:
             outs = await delegate(ctx, aid, children)
             for (sid, _), o in zip(subs.items(), outs):
                 ctx.rules[sid] = {k: v for k, v in o.items() if k in RULE_KEYS or k == "metal_bonus"}
-                ctx.promise[sid] = o["promise"]
+                ctx.promise[sid] = upside_promise(ctx, sid, o["promise"])
             ctx.rules.pop(fid, None)
             ctx.promise.pop(fid, None)
 

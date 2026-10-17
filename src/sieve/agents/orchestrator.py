@@ -104,8 +104,10 @@ async def wait_round(ctx: Ctx, ex, round_no: int, tail: int = 0) -> None:
 
 async def run(db_path: str, budget_cpu_s: float = 4 * 3600.0, n_workers: int | None = None, seed: int = 0,
               run_id: str | None = None, cost_model: CostModel | None = None, candidates: list[str] | None = None,
-              replay: dict | None = None, arm: str = "sieve", models: dict | None = None) -> str:
-    """arm/models: a named variant, e.g. arm='sieve-dsv4' with a different model per role."""
+              replay: dict | None = None, arm: str = "sieve", models: dict | None = None,
+              policy: dict | None = None) -> str:
+    """arm/models/policy: a named variant, e.g. arm='sieve-dsv4' with a different model per role,
+    or arm='sieve-v5' with the upside-and-random-slice search policy."""
     st = Store(db_path)
     role_models = {**default_models(), **(models or {})}
     n_workers = n_workers or default_workers()
@@ -115,11 +117,12 @@ async def run(db_path: str, budget_cpu_s: float = 4 * 3600.0, n_workers: int | N
         seed, n_workers = cfg["seed"], cfg.get("n_workers") or n_workers
         cost_model, candidates, replay = CostModel(**cfg["cost_model"]), cfg.get("candidates"), cfg.get("replay")
         role_models = {**role_models, **(cfg.get("role_models") or {})}
+        policy = cfg.get("policy") or policy
     else:
         cost_model = cost_model or CostModel()
         run_id = st.create_run(arm, budget_cpu_s, {
-            "role_models": role_models, "seed": seed, "n_workers": n_workers, "candidates": candidates,
-            "replay": replay, "cost_model": cost_model.__dict__, "agent_design": "v4: families, delegation, pipelined rounds",
+            "role_models": role_models, "policy": policy or {}, "seed": seed, "n_workers": n_workers, "candidates": candidates,
+            "replay": replay, "cost_model": cost_model.__dict__, "agent_design": "v5: upside promise + random slice" if policy else "v4: families, delegation, pipelined rounds",
             "pool": "arena" if candidates else "CoRE-2019-ASR, PLD >= 3.3 A"}, run_id)
     for role, model in role_models.items():
         st.upsert_agent(run_id, role, role, model=model, parent_id=None if role == "orchestrator" else "orchestrator")
@@ -135,7 +138,8 @@ async def run(db_path: str, budget_cpu_s: float = 4 * 3600.0, n_workers: int | N
         if todo:  # round 0: tier 0 on every candidate, paid from the budget
             st.start_round(run_id, 0, {"phase": "tier0", "n": len(todo)})
             st.queue_tasks(run_id, 0, [{"structure": s, "tier": 0} for s in todo])
-        ctx = Ctx(st, run_id, make_oracle(wcfg), None, cost_model, n_workers, random.Random(seed), models=role_models)
+        ctx = Ctx(st, run_id, make_oracle(wcfg), None, cost_model, n_workers, random.Random(seed), models=role_models,
+              policy=policy or {})
         await wait_round(ctx, ex, 0)
         if todo:
             st.finish_round(run_id, 0, {"spent_cpu_s": round(ctx.oracle.spent(), 1), "phase": "tier0"})

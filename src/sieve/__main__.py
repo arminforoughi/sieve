@@ -43,7 +43,7 @@ def cmd_resume(a) -> None:
     arm = st.run(a.run_id)["arm"]
     if not a.auto:  # a person typed this: that is an intervention, and the dashboard counts it
         st.event(a.run_id, "intervention", {"text": "manual resume from the command line"})
-    if arm == "sieve":
+    if arm.startswith("sieve"):  # every agent variant; its models and policy are in the run config
         from sieve.agents.team import run_sync
         run_sync(a.db, run_id=a.run_id)
     elif arm in ARMS:
@@ -77,8 +77,11 @@ def cmd_status(a) -> None:
 def cmd_sieve(a) -> None:
     from sieve.agents.team import run_sync
 
+    from sieve.arena_eval import POLICIES, VARIANTS
+
     model = _cost_model(a.calibration)
-    run_id = run_sync(a.db, a.budget_h * 3600.0, a.workers, a.seed, run_id=a.run_id, cost_model=model)
+    run_id = run_sync(a.db, a.budget_h * 3600.0, a.workers, a.seed, run_id=a.run_id, cost_model=model,
+                      arm=a.arm, models=VARIANTS.get(a.arm), policy=POLICIES.get(a.arm))
     print(f"finished {run_id}")
     cmd_status(argparse.Namespace(db=a.db, run_id=run_id))
 
@@ -110,6 +113,7 @@ def main() -> None:
     sv.add_argument("--seed", type=int, default=0)
     sv.add_argument("--run-id", default=None)
     sv.add_argument("--calibration", default=None)
+    sv.add_argument("--arm", default="sieve", help="agent variant: sieve, sieve-v5, sieve-dsv4, ... (see arena_eval)")
     sv.set_defaults(fn=cmd_sieve)
     r = sub.add_parser("resume")
     r.add_argument("run_id")
