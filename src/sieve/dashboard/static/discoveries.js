@@ -20,7 +20,13 @@ async function boot() {
     + (d.explained ? "Write-ups are by the analyst agent (Nemotron Super), grounded only in the run's own data. " : `No analyst write-ups for this run yet (python -m sieve.agents.explain <db> ${want}). `)
     + "Uptake is simulated CO₂ loading at 298 K, 1 bar without framework charges: a ranking signal, not an experimental prediction.";
   $("cards").innerHTML = d.cards.map((c, i) => card(c, i)).join("");
-  d.cards.forEach((c, i) => viewer(`mv-${i}`, c.structure));
+  // the tour simulates CO2 positions on first view; start with the top card, others on demand
+  d.cards.forEach((c, i) => {
+    const host = document.getElementById(`mv-${i}`);
+    const info = { features: c.features, key_features: (c.note || {}).key_features, uptake: c.estimate.uptake };
+    if (i === 0) new Tour(host, c.structure, info);
+    else { host.innerHTML = `<button class="tour-start">Show the 3D tour: framework, pore, CO₂ inside</button>`; host.firstChild.onclick = () => new Tour(host, c.structure, info); }
+  });
 }
 
 function card(c, i) {

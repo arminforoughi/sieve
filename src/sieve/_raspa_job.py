@@ -78,6 +78,9 @@ def _script(job: dict) -> str:
     ]
     if job["kind"] == "mc_grid":
         mc += ["UseTabularGrid                yes", *grid]
+    if job["kind"] == "movie":  # visualization only: snapshots of where CO2 sits
+        mc = [x.replace("Movies                        no", "Movies                        yes") for x in mc]
+        mc += [f"WriteMoviesEvery              {job.get('movie_every', 20)}"]
     return "\n".join([*mc, *comp]) + "\n"
 
 
@@ -120,6 +123,10 @@ def main() -> None:
     else:
         from RASPA2.output_parser import parse
 
+        if job["kind"] == "movie":
+            mdir = os.path.join("Movies", "System_0")
+            result["movie"] = {f: open(os.path.join(mdir, f)).read() for f in os.listdir(mdir)
+                               if "component_CO2" in f or "allcomponents" in f}
         mol = parse(raw)["Number of molecules"][job["molecule"]]
         abs_ = mol["Average loading absolute [mol/kg framework]"]
         exc = mol["Average loading excess [mol/kg framework]"]

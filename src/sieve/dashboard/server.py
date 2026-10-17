@@ -515,7 +515,7 @@ def create_app(db: str, replay_run: str | None = None) -> FastAPI:
         from fastapi.responses import HTMLResponse
 
         html = (STATIC / fname).read_text()
-        for asset in ("app.js", "style.css", "agents.js", "agents.css", "discoveries.js"):  # version by mtime
+        for asset in ("app.js", "style.css", "agents.js", "agents.css", "discoveries.js", "tour.js"):  # version by mtime
             if (STATIC / asset).exists():
                 html = html.replace(f"/static/{asset}", f"/static/{asset}?v={int((STATIC / asset).stat().st_mtime)}")
         return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
@@ -567,6 +567,14 @@ def create_app(db: str, replay_run: str | None = None) -> FastAPI:
         T = clock(run)
         evs = events_after(db, run, 0, T, 100000)
         return evs[-limit:]
+
+    @app.get("/api/viz")
+    def api_viz(name: str):
+        from sieve import viz
+        out = viz.get(name)
+        if out.get("status") == "ready":
+            out["cif"] = cif_payload(name).get("cif")
+        return out
 
     @app.get("/api/cif")
     def api_cif(name: str):

@@ -15,7 +15,16 @@
   .card { display: grid; grid-template-columns: 340px minmax(0, 1fr) 300px; gap: 16px; background: var(--panel);
     border: 1px solid var(--border); border-radius: 6px; padding: 16px; margin-bottom: 12px; }
   .card.rec { border: 2px solid var(--green); }
-  .mv { position: relative; height: 260px; border: 1px solid var(--grid); border-radius: 6px; }
+  .mv { position: relative; height: 420px; border: 1px solid var(--grid); border-radius: 6px; }
+  .card { grid-template-columns: 460px minmax(0, 1fr) 300px !important; }
+  .tour .tour-gl { position: absolute; inset: 0; }
+  .tour-cap { position: absolute; left: 0; right: 0; bottom: 0; z-index: 2; background: rgba(255,255,255,0.92); border-top: 1px solid var(--grid); padding: 8px 12px; min-height: 76px; }
+  .tour-title { font: 600 13px var(--sans); color: var(--accent); letter-spacing: 0.02em; }
+  .tour-text { font-size: 13px; color: var(--ink); line-height: 1.4; margin-top: 2px; }
+  .tour-ctl { position: absolute; top: 8px; right: 8px; z-index: 2; display: flex; gap: 4px; }
+  .tour-ctl button { width: 26px; height: 26px; border: 1px solid var(--border); background: var(--panel); border-radius: 4px; font: 12px var(--mono); cursor: pointer; color: var(--ink-2); }
+  .tour-ctl button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .tour-wait { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 24px; color: var(--ink-3); font-size: 13px; }
   .rank { font: 600 12px var(--mono); color: var(--ink-3); letter-spacing: 0.08em; }
   .name { font: 600 20px var(--mono); margin: 2px 0 4px; }
   .head { font-size: 16px; font-weight: 600; margin: 8px 0 6px; }
@@ -36,7 +45,8 @@
   .muted { color: var(--ink-3); font-size: 13px; }
   .truth { font: 13px var(--mono); margin-top: 8px; }
   .mv canvas { width: 100% !important; height: 100% !important; }
-  @media (max-width: 1100px) { .card { grid-template-columns: 1fr; } .mv { height: 240px; } }
+  @media (max-width: 1100px) { .card { grid-template-columns: 1fr !important; } .mv { height: 380px; } }
+  .tour-start { position: absolute; inset: 0; margin: auto; width: 70%; height: 44px; border: 1px solid var(--accent); color: var(--accent); background: var(--panel); border-radius: 6px; font-size: 13px; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -47,6 +57,7 @@
   <p class="lead" id="lead"></p>
   <div id="cards"></div>
 </div>
+<script src="/static/tour.js"></script>
 <script src="/static/discoveries.js"></script>
 </body>
 </html>
