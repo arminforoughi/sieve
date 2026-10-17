@@ -3,7 +3,7 @@
   lead reviewer (MODEL_LARGE)   collects every claim made about the structure (the analyst's
                                 write-up and the Science page's own statements), splits them into
                                 individual claims
-  sub-reviewers (MODEL_SMALL)   one per claim, in parallel: check the claim against an evidence
+  sub-reviewers (SUB_MODEL)     one per claim, in parallel: check the claim against an evidence
                                 pack of real numbers and return supported / partly / refuted /
                                 unverifiable, with the evidence used
   recursion                     a sub-reviewer that finds a compound claim splits it, and spawns a
@@ -44,6 +44,8 @@ CONTEXT = {
     "Cu-BTC": "HKUST-1 has open Cu2+ paddlewheel sites and small tetrahedral pockets; experimentally ~4 mmol/g CO2 at 1 bar, "
               "298 K, partly from electrostatics, which this charge-free model omits.",
 }
+# sub-reviewers on the large model: the small one accepted causal claims from bare comparisons
+SUB_MODEL = llm.MODEL_LARGE
 VERDICTS = ("supported", "partly", "refuted", "unverifiable")
 _busy: set[str] = set()
 _lock = threading.Lock()
@@ -81,8 +83,14 @@ ELECTROSTATIC = re.compile(r"\bopen[- ](metal|cu|mg|zn|co|ni|fe|mn)\b|\bunsatura
                            r"\bquadrupol|\blewis[- ]acid|\bcoordinatively\b|\bpolar (site|group|surface)", re.I)
 
 
+# ...unless the claim is about the model's own limitation ("the force field neglects framework charges"),
+# which is a fact about the setup, not a claim that needs electrostatics to test
+MODEL_CAVEAT = re.compile(r"\b(force[- ]field|model|simulation)s?\b[^.]*\b(omit|neglect|lack|ignor|exclud|without|no)\w*", re.I)
+
+
 def electrostatic(claim: str) -> bool:
-    return bool(ELECTROSTATIC.search(claim))
+    return bool(ELECTROSTATIC.search(claim)) and not (MODEL_CAVEAT.search(claim) and not re.search(
+        r"\b(could|would|may|might|drive|cause|enhanc|explain|alter|over|under)", claim, re.I))
 
 
 def evidence_pack(name: str, analyst: dict | None) -> dict:
@@ -188,7 +196,7 @@ async def check(ctx: Ctx, claim: str, ev: dict, aid: str, parent: str) -> dict:
     out, _ = await _step(ctx, "reviewer", f"check: {claim[:80]}",
                         EXTRA_SUB + (" This claim is already a part of a split claim: do NOT split it, judge it." if leaf else ""),
                         {"claim": claim, "evidence": ev, "background_reasoning": lib, "answer_schema": schema},
-                        fallback, validate, agent_id=aid, parent_id=parent, model=llm.MODEL_SMALL,
+                        fallback, validate, agent_id=aid, parent_id=parent, model=SUB_MODEL,
                         expect=("verdict", "split"))
     node = {"id": aid, "claim": claim, "verdict": out["verdict"], "evidence": out["evidence"], "children": [],
             "grounding": [{**g, "used": str(g["id"]) in out["cites"]} for g in lib]}
@@ -304,7 +312,7 @@ async def review(name: str, analyst: dict | None = None) -> dict:
                                    "would_change_our_mind": "a simulation with framework charges", "_text": "rule-based summary"},
                           v_final, agent_id="reviewer", parent_id=None, expect=("assessment",))
     out = {"structure": name, "analyst_writeup": analyst, "claims": tree, "tally": tally, "assessment": final["assessment"],
-           "would_change_our_mind": final["would_change_our_mind"], "models": {"lead": llm.MODEL_LARGE, "sub": llm.MODEL_SMALL}}
+           "would_change_our_mind": final["would_change_our_mind"], "models": {"lead": llm.MODEL_LARGE, "sub": SUB_MODEL}}
     (REVIEW_DB.parent / f"review-{name}.json").write_text(json.dumps(out))
     st.finish_run(run_id, "finished", {"tally": tally})
     return out
