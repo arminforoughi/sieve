@@ -99,8 +99,22 @@ On 9 paired measurements grid and direct agree within reported error (tier-2 dif
 
 ## Results
 
-Baselines are running. This section is filled in from `sieve status` and the referee report,
-including if SIEVE loses to the descriptor-ranked baseline.
+Full-pool runs, 4 CPU-h each. Every arm's top 10 was re-measured at tier 2 by an independent
+referee.
+
+| Structure | Found by | Referee, 1 bar (mol/kg) | Crystal file |
+|---|---|---|---|
+| ZADREE | random, uniform | 9.41 ± 0.04 | disordered (doubled atoms at the Cu sites) |
+| GANBAZ01 | descriptor | 8.16 ± 0.05 | disordered |
+| WARFAY04 | random | 8.16 ± 0.07 | disordered |
+| **QIPROY** | **SIEVE** | **7.15 ± 0.06** | clean |
+
+- **Highest uptake:** SIEVE did not find the highest-uptake structure. On the 300-structure arena
+  benchmark it does not yet beat random search (median winner 4.6 vs 5.2 mol/kg at 1 CPU-h).
+- **Clean files:** the three structures above SIEVE's pick all have broken crystal files, and
+  disorder-resolved re-measurements are in progress.
+- **More detail:** the comparison with MEA, 13X, HKUST-1 and Mg-MOF-74, and why it matters, is in
+  [docs/OVERVIEW.md](docs/OVERVIEW.md#9-what-we-found-compared-with-standard-capture-materials).
 
 ## License
 

@@ -244,3 +244,122 @@ src/sieve/
   agents/            orchestrator, scout, allocator, critic, analyst, reviewer, llm, base, world
   dashboard/         FastAPI server and static pages
 ```
+
+---
+
+## 9. What we found, compared with standard capture materials
+
+### The leads
+
+| Structure | Found by | Uptake at 1 bar (referee, tier 2) | Clean crystal file? |
+|---|---|---|---|
+| **ZADREE** (Cu MOF) | random and uniform baselines | 9.41 ± 0.04 mol/kg | ⚠️ no: 32 N/O atom pairs 0.45 Å apart at the Cu sites |
+| GANBAZ01 (Mn MOF) | descriptor baseline | 8.16 ± 0.05 | ⚠️ no: duplicated rings |
+| WARFAY04 (Zn MOF) | random baseline | 8.16 ± 0.07 | ⚠️ no: duplicated hydrogens |
+| **QIPROY** (Cu MOF) | **SIEVE** | 7.15 ± 0.06 | ✅ yes |
+
+### Against the standards
+
+Same model and protocol for every row in the first table (298 K, SieveUFF, no framework charges):
+
+| Structure | 0.15 bar (flue gas) | 1 bar | CO₂/N₂ selectivity | Working capacity, temperature swing | Heat of adsorption |
+|---|---|---|---|---|---|
+| ZADREE | 6.97 | 9.41 | 74.5 | 5.54 | 42.4 kJ/mol |
+| QIPROY | 1.48 | 7.15 | 22.0 | 1.33 | 25.0 kJ/mol |
+| HKUST-1 | 0.56 | 1.80 | 13.3 | 0.48 | 26.5 kJ/mol |
+| Mg-MOF-74 | 0.27 | 1.74 | 6.3 | 0.22 | 17.5 kJ/mol |
+| typical pool MOF (CAXTEC) | 0.44 | 2.08 | 8.3 | 0.37 | 20.4 kJ/mol |
+
+Uptakes and working capacities are in mol/kg.
+
+Approximate literature values for orientation. These are **not** from this project; check them
+against primary sources before citing:
+
+| Material | Type | CO₂ at 0.15 bar | CO₂ at 1 bar | Binding strength | Weak point |
+|---|---|---|---|---|---|
+| MEA amine (30 wt%) | liquid, industrial standard | ~1 mol/kg cyclic capacity | (n/a) | ~85 kJ/mol (chemical) | regeneration energy, corrosion, degradation |
+| Zeolite 13X | solid, commercial | ~2.5–3 | ~4.5–5 | ~40–50 kJ/mol | water ruins its performance |
+| Mg-MOF-74 | best-known MOF | ~5–6 | ~8 | ~40–47 kJ/mol | water-sensitive, costly |
+| HKUST-1 | common MOF | ~0.5–1 | ~4 | ~25–30 kJ/mol | moderate everywhere |
+
+### How to read this
+
+**On paper, ZADREE beats the standards.** It holds about 7 mol/kg at flue-gas pressure against
+~1 for MEA and ~3 for 13X. Its binding strength (42 kJ/mol) sits in the useful range: strong
+enough to hold CO₂, roughly half of an amine's chemical bond, so it should be cheaper to
+regenerate.
+
+**We cannot yet trust that comparison:**
+
+1. **The model is not the lab.** With no framework charges, the model puts Mg-MOF-74 at 1.7 mol/kg
+   against ~8 in experiment. Comparing a simulated 9.4 with a measured 8 compares two different
+   things. Only the same-model table above is a fair comparison.
+2. **ZADREE's crystal file is disordered.** All 32 of its nitrogen atoms sit 0.45 Å from an oxygen
+   atom: one site recorded both ways, kept twice. The doubled atoms line exactly the Cu pockets where
+   CO₂ binds, and could explain its unusually deep −18.9 kJ/mol well. A corrected copy is being
+   re-simulated now. The same applies to ranks 2 and 3.
+3. **No pore blocking yet** (in progress). The model can fill pockets CO₂ cannot reach.
+4. **Rigid frameworks, dry gas.** Real flue gas is humid, and water is what kills most MOFs and 13X
+   in practice.
+5. **It is a published compound** (CSD refcode ZADREE). Someone may already have measured it, so the
+   CSD entry and its paper come first.
+
+**What is interesting even with the caveats:**
+
+- **Geometry alone:** ZADREE binds CO₂ 16× better than a typical pool structure at flue-gas
+  pressure, with no electrostatics at all.
+- **Charges might help further:** most strong sorbents rely on charged sites, so adding framework
+  charges may raise its numbers further. That is an expectation, not a result.
+- **The real risk is an artefact:** disorder and pore blocking are the main ways its result could
+  be one.
+
+**What would make it significant:**
+
+1. Find its paper and any existing CO₂ measurements.
+2. Re-simulate the disorder-resolved structure with pore blocking and with framework charges.
+3. Check water stability.
+4. Synthesise and measure it, which needs a lab.
+
+### Why look beyond MEA and 13X at all
+
+- **MEA works but is expensive to run.** Boiling the CO₂ back out of the amine solution can take
+  about a quarter to a third of a power plant's output. That energy penalty is the main reason
+  carbon capture is costly. The amine also degrades and corrodes equipment.
+- **13X is cheap but needs dry gas.** Drying flue gas costs money and energy.
+- **Solid sorbents could do better on both.** They could hold more CO₂ per kg and need less energy
+  to release it. A modest gain over MEA is worth a great deal at power-plant scale, which is why
+  thousands of MOFs are studied.
+
+### Why SIEVE matters
+
+**The bottleneck is search, not chemistry.** There are over 12,000 known MOF structures and
+millions of hypothetical ones. Lab tests take weeks per material. Simulating every known structure
+properly would take ~220 CPU-hours at the cheapest useful fidelity, and far more at confirmed
+fidelity.
+
+**What SIEVE did in 4 CPU-hours:**
+
+- **Screen:** it described all 8,803 candidates at tier 0, ran GCMC on 115 of them and confirmed 10
+  at tier 2.
+- **Verify:** it named a winner, QIPROY, which survived the critic, the referee (7.23 claimed,
+  7.15 re-measured), the peer reviewer and the disorder check.
+
+**The honest scorecard:**
+
+- **SIEVE did not find the highest-uptake structure.** The random and uniform baselines hit ZADREE
+  through one lucky shuffle they share, at position 56 of 8,803.
+- **On the 300-structure arena benchmark, SIEVE does not yet beat random search.**
+- **The fixes are being measured:** v5 adds an upside-seeking promise and a random slice, and the
+  disorder check is being wired into the critic. Both are being benchmarked.
+- **But the disorder check changes what "best" means.** The three structures that beat SIEVE's pick
+  all have broken crystal files, and QIPROY is the top result with a clean one.
+
+**The contribution so far is the method:** a budgeted, fault-tolerant multi-agent screen whose
+claims pass four independent checks. It finds problems in its own results, and in its baselines'.
+
+**The output is a shortlist for chemists, not a material.**
+
+- **ZADREE:** a lead that warrants steps 1–2 above.
+- **QIPROY:** the best-supported candidate.
+
+Neither is a discovery until a lab measures it.
