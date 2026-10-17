@@ -137,7 +137,7 @@ select { background: var(--panel); color: var(--ink); border: 1px solid var(--bo
 
 /* progress */
 .progress { grid-area: progress; display: flex; flex-direction: column; }
-.legend { position: absolute; top: 9px; right: 12px; display: flex; gap: 12px; font-size: 11px; color: var(--ink-2); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 4px 16px 0; font-size: 11px; color: var(--ink-2); min-height: 20px; }
 .legend span { display: inline-flex; gap: 6px; align-items: center; }
 .chart { position: relative; flex: 1; min-height: 0; }
 .chart svg { position: absolute; inset: 0; width: 100%; height: 100%; }

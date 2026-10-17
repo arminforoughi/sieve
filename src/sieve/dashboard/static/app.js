@@ -5,10 +5,10 @@ const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const ACCENT = "#0B8A98";
 const ARMS = [
-  { key: "random", label: "random", dash: "1.5 4", cls: "muted" },
-  { key: "descriptor", label: "descriptor", dash: "7 4", cls: "muted" },
-  { key: "uniform", label: "uniform tier-2", dash: "8 3 1.5 3", cls: "muted" },
-  { key: "sieve", label: "SIEVE", dash: null, cls: "sieve" },
+  { key: "random", label: "random", end: "random", dash: "1.5 4", cls: "muted" },
+  { key: "descriptor", label: "descriptor", end: "descriptor", dash: "7 4", cls: "muted" },
+  { key: "uniform", label: "uniform tier-2", end: "uniform", dash: "8 3 1.5 3", cls: "muted" },
+  { key: "sieve", label: "SIEVE", end: "SIEVE", dash: null, cls: "sieve" },
 ];
 const KILL_HOLD_MS = +(params.get("hold") || 400);  // a killed job stays red this long, then the next slides in
 const BEST_DWELL_MS = 2500;    // the 3D view switches structure at most this often (replay is 20x)
@@ -495,7 +495,7 @@ const chart = {
     if (!W || !H) return;
     const svg = d3.select("#c-svg").attr("viewBox", `0 0 ${W} ${H}`);
     svg.selectAll("*").remove();
-    const m = { l: 44, r: 118, t: 30, b: 24 };
+    const m = { l: 44, r: 112, t: 14, b: 24 };
     const curves = f.curves || {};
     const present = ARMS.filter((a) => curves[a.key] && curves[a.key].points.length);
     const all = present.flatMap((a) => curves[a.key].points);
@@ -527,7 +527,7 @@ const chart = {
     if (!ends.some((e, i) => i && e.y - ends[i - 1].y < 13)) {  // direct labels only when they do not collide
       for (const e of ends) {
         svg.append("line").attr("x1", e.x).attr("x2", W - m.r + 4).attr("y1", e.y).attr("y2", e.y).attr("stroke", "#E2E5EA");
-        svg.append("text").attr("class", "endlabel").attr("x", W - m.r + 8).attr("y", e.y + 4).text(`${e.a.label} ${e.v.toFixed(2)}`);
+        svg.append("text").attr("class", "endlabel").attr("x", W - m.r + 8).attr("y", e.y + 4).text(`${e.a.end} ${e.v.toFixed(2)}`);
       }
     }
     if (f.reference) {  // the server sends this only once the run has ended

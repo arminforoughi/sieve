@@ -229,12 +229,12 @@ def frame(db: str, run_id: str | None, T: float) -> dict:
 
     curves = {}
     for arm in ARMS:
-        row = con.execute("SELECT run_id FROM runs WHERE arm=? AND (run_id=? OR status='finished') "
+        # the selected run for its own arm, else that arm's most recent run (running or not)
+        row = con.execute("SELECT run_id FROM runs WHERE arm=? AND created_at<=? "
                           "ORDER BY (run_id=?) DESC, created_at DESC LIMIT 1",
-                          (arm, run_id, run_id)).fetchone()
+                          (arm, T, run_id)).fetchone()
         if row:
-            curves[arm] = {"run_id": row[0], "points": curve(con, row[0],
-                                                             T if row[0] == run_id else 1e18)}
+            curves[arm] = {"run_id": row[0], "points": curve(con, row[0], T)}
     out["curves"] = curves
     out["reference"] = None  # held-out best: revealed only when a referee/labels result exists
     if t_end and _has(con, "reference"):
