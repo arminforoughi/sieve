@@ -110,9 +110,13 @@ def evidence_pack(name: str, analyst: dict | None) -> dict:
     row = runs.con.execute("SELECT run_id FROM evaluations WHERE structure=? AND status='ok' AND tier>0 "
                            "ORDER BY tier DESC LIMIT 1", (name,)).fetchone()
     dos = dossier(runs, row[0], name, pool_percentiles()) if row else {}
+    trail = [json.loads(p).get("text", "")[:200] for (p,) in runs.con.execute(
+        "SELECT payload_json FROM events WHERE run_id=? AND type IN ('veto','promote','recommend') "
+        "AND payload_json LIKE ? ORDER BY ts", (row[0], f"%{name}%"))][:8] if row else []
     return {"structure": name, "descriptors_and_percentiles": dos.get("features"),
             "metals": dos.get("metals") or sci.get("metals"), "atoms_per_cell": sci.get("n_atoms"),
             "open_metal_sites": dos.get("open_metal_sites"), "screening_measurements": dos.get("measurements"),
+            "screening_decisions": trail or None,
             "energy_field": {k: v for k, v in (sci.get("pockets") or {}).items() if k != "hist"},
             "energy_field_meaning": ("RASPA van der Waals grid for the oxygen atom of a CO2 molecule (TraPPE O_co2 probe), "
                                      "kJ/mol; accessible_fraction = share of the cell where it is attractive; "
@@ -134,6 +138,11 @@ def evidence_pack(name: str, analyst: dict | None) -> dict:
             "analyst_writeup": analyst}
 
 
+def pct(x: float) -> str:
+    """A percentage that never rounds a small non-zero share to '0%' (the reviewer caught that)."""
+    return "0%" if x == 0 else f"{x:.1f}%" if x < 10 else f"{x:.0f}%"
+
+
 def capture(props: dict | None) -> dict | None:
     """The capture metrics, compact, for the evidence pack (None until computed)."""
     if not props:
@@ -151,7 +160,8 @@ def page_claims(name: str, ev: dict) -> list[str]:
     p, iso = ev.get("energy_field") or {}, ev.get("isotherm_298K") or []
     at = lambda iso, pb: next((q["uptake"] for q in iso if q["p_bar"] == pb), None)  # noqa: E731
     if p:
-        out.append(f"{round(100 * p.get('strong_fraction', 0))}% of {name}'s pore binds a CO2 oxygen by more than 10 kJ/mol, "
+        sf = 100 * p.get("strong_fraction", 0)
+        out.append(f"{pct(sf)} of {name}'s pore binds a CO2 oxygen by more than 10 kJ/mol, "
                    f"and the deepest well is {p.get('min_kjmol')} kJ/mol.")
     u, t = at(iso, 0.15), at((ev.get("typical_structure") or {}).get("isotherm") or [], 0.15)
     if u and t:
@@ -207,7 +217,9 @@ async def check(ctx: Ctx, claim: str, ev: dict, aid: str, parent: str) -> dict:
 
     def validate(d):
         v = str(d.get("verdict", "")).lower()
-        split = [str(x)[:220] for x in (d.get("split") or []) if str(x).strip()][:3] if not leaf else []
+        # models sometimes return sub-claims as {"claim": ...} objects instead of strings
+        split = [str(x.get("claim", "") if isinstance(x, dict) else x)[:220] for x in (d.get("split") or [])]
+        split = [x for x in split if x.strip()][:3] if not leaf else []
         if len(split) < 2:  # a "split" into one part is just the claim again
             split = []
         if v not in VERDICTS and not split:
