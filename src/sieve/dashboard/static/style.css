@@ -203,3 +203,6 @@ select { background: var(--panel); color: var(--ink); border: 1px solid var(--bo
 .verdict .call.ok { color: var(--accent); }
 .verdict td.bad { color: var(--red); }
 .verdict-foot { grid-column: 1 / -1; font-size: 13px; color: var(--ink-2); padding-top: 4px; }
+.navlinks { font: 13px var(--sans) !important; letter-spacing: 0 !important; color: var(--ink-3); }
+.navlinks a { color: var(--accent); text-decoration: none; }
+.navlinks b { color: var(--ink); font-weight: 600; }

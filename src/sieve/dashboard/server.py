@@ -309,6 +309,45 @@ def verdict(con: sqlite3.Connection, run_id: str, T: float) -> dict | None:
             "rows": rows, "seeds": seeds}
 
 
+def discoveries(db: str, run_id: str) -> dict:
+    """The run's top structures: dossier (features, percentiles, measurements, who picked them) +
+    the analyst's write-up when one exists + the true value if the run has finished and truth exists."""
+    from sieve.agents.explain import dossier, pool_percentiles
+    from sieve.store import Store, estimates_from_evaluations
+
+    st = Store(db)
+    con = st.con
+    est = estimates_from_evaluations(con, run_id)
+    ranked = sorted(est.values(), key=lambda e: e.uptake, reverse=True)[:6]
+    notes = {}
+    for (p,) in con.execute("SELECT payload_json FROM events WHERE run_id=? AND type='discovery' ORDER BY event_id",
+                            (run_id,)):
+        d = json.loads(p)
+        notes[d["structure"]] = d
+    rec = con.execute("SELECT payload_json FROM events WHERE run_id=? AND type='recommend' ORDER BY event_id DESC LIMIT 1",
+                      (run_id,)).fetchone()
+    rec = json.loads(rec[0])["structure"] if rec else None
+    run = con.execute("SELECT * FROM runs WHERE run_id=?", (run_id,)).fetchone()
+    truth = None
+    if run and run["status"] == "finished":
+        truth, _ = _truth_for(con, run_id)
+    pct = _pct_cache()
+    cards = []
+    for i, e in enumerate(ranked, 1):
+        dos = dossier(st, run_id, e.structure, pct)
+        dos.update(rank=i, estimate={"uptake": e.uptake, "err": e.err, "tier": e.tier},
+                   note=notes.get(e.structure), recommended=e.structure == rec,
+                   true_value=(truth or {}).get(e.structure))
+        cards.append(dos)
+    return {"run": dict(run) if run else None, "cards": cards, "explained": bool(notes)}
+
+
+@lru_cache(maxsize=1)
+def _pct_cache():
+    from sieve.agents.explain import pool_percentiles
+    return pool_percentiles()
+
+
 ROLE_ORDER = {"orchestrator": 0, "scout": 1, "allocator": 2, "critic": 3}
 
 
@@ -472,14 +511,39 @@ def create_app(db: str, replay_run: str | None = None) -> FastAPI:
             return replay["ts0"] + (time.time() - replay["t0"]) * REPLAY_SPEED
         return time.time()
 
-    @app.get("/")
-    def index():
+    def page(fname: str):
         from fastapi.responses import HTMLResponse
 
-        html = (STATIC / "index.html").read_text()
-        for asset in ("app.js", "style.css"):  # version by mtime: never a stale asset
-            html = html.replace(f"/static/{asset}", f"/static/{asset}?v={int((STATIC / asset).stat().st_mtime)}")
+        html = (STATIC / fname).read_text()
+        for asset in ("app.js", "style.css", "agents.js", "agents.css", "discoveries.js"):  # version by mtime
+            if (STATIC / asset).exists():
+                html = html.replace(f"/static/{asset}", f"/static/{asset}?v={int((STATIC / asset).stat().st_mtime)}")
         return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
+
+    @app.get("/")
+    def index():
+        return page("index.html")
+
+    @app.get("/agents")
+    def agents_page():
+        return page("agents.html")
+
+    @app.get("/compare")
+    def compare_page():
+        return page("compare.html")
+
+    @app.get("/discoveries")
+    def discoveries_page():
+        return page("discoveries.html")
+
+    @app.get("/api/discoveries")
+    def api_discoveries(run: str):
+        return discoveries(db, run)
+
+    @app.get("/api/compare")
+    def api_compare():
+        rep = Path(__file__).resolve().parents[3] / "data" / "arena-report.json"
+        return json.loads(rep.read_text()) if rep.exists() else {"arms": {}}
 
     @app.get("/api/config")
     def config():

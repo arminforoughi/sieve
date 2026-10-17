@@ -43,7 +43,10 @@ def cmd_resume(a) -> None:
     arm = st.run(a.run_id)["arm"]
     if not a.auto:  # a person typed this: that is an intervention, and the dashboard counts it
         st.event(a.run_id, "intervention", {"text": "manual resume from the command line"})
-    if arm in ARMS:
+    if arm == "sieve":
+        from sieve.agents.team import run_sync
+        run_sync(a.db, run_id=a.run_id)
+    elif arm in ARMS:
         run_arm(arm, a.db, run_id=a.run_id)
     else:
         raise SystemExit(f"resume for arm {arm!r} is not implemented yet")
@@ -71,6 +74,15 @@ def cmd_status(a) -> None:
             print(f"    {e.structure:40s} {e.uptake:7.3f} +/- {e.err:.3f} mol/kg  (tier {e.tier})")
 
 
+def cmd_sieve(a) -> None:
+    from sieve.agents.team import run_sync
+
+    model = _cost_model(a.calibration)
+    run_id = run_sync(a.db, a.budget_h * 3600.0, a.workers, a.seed, run_id=a.run_id, cost_model=model)
+    print(f"finished {run_id}")
+    cmd_status(argparse.Namespace(db=a.db, run_id=run_id))
+
+
 def cmd_dashboard(a) -> None:
     from sieve.dashboard.server import serve
 
@@ -92,6 +104,13 @@ def main() -> None:
     b.add_argument("--run-id", default=None)
     b.add_argument("--calibration", default=None, help="DB to fit the shared cost model from")
     b.set_defaults(fn=cmd_baseline)
+    sv = sub.add_parser("sieve", help="run the agent team")
+    sv.add_argument("--budget-h", type=float, default=4.0)
+    sv.add_argument("--workers", type=int, default=None)
+    sv.add_argument("--seed", type=int, default=0)
+    sv.add_argument("--run-id", default=None)
+    sv.add_argument("--calibration", default=None)
+    sv.set_defaults(fn=cmd_sieve)
     r = sub.add_parser("resume")
     r.add_argument("run_id")
     r.add_argument("--auto", action="store_true", help="issued by a supervisor, not a person")

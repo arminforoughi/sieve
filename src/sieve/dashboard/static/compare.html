@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SIEVE Compare</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+  .cmp { max-width: 1200px; margin: 0 auto; padding: 16px; }
+  .cmp h1 { font: 600 20px var(--sans); margin: 8px 0 4px; }
+  .cmp p.lead { color: var(--ink-2); margin: 0 0 16px; max-width: 900px; }
+  .nav { font-size: 13px; margin-bottom: 8px; } .nav a { color: var(--accent); text-decoration: none; }
+  .budgets { display: flex; gap: 6px; margin: 8px 0 12px; }
+  .budgets button { font: 12px var(--mono); border: 1px solid var(--border); background: var(--panel); border-radius: 4px; padding: 4px 10px; cursor: pointer; color: var(--ink-2); }
+  .budgets button.on { border-color: var(--ink-3); color: var(--ink); }
+  table.m { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; }
+  table.m th { text-align: left; font-size: 11px; color: var(--ink-3); font-weight: 600; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  table.m td { padding: 10px 12px; border-bottom: 1px solid var(--grid); font-size: 14px; }
+  table.m td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
+  table.m td .iqr { color: var(--ink-3); font-size: 12px; }
+  table.m tr.sieve td { background: var(--accent-soft); font-weight: 600; }
+  .best { color: var(--green); }
+  .note { color: var(--ink-3); font-size: 12px; margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="cmp">
+  <div class="nav"><a href="/agents">Agents</a> · <a href="/">Control room</a> · <b>Compare</b> · <a href="/discoveries">Discoveries</a></div>
+  <h1>Arena: every arm, 20 seeds, scored against ground truth</h1>
+  <p class="lead" id="lead"></p>
+  <div class="budgets" id="budgets"></div>
+  <table class="m"><thead><tr>
+    <th>arm</th><th class="num">best true uptake found<br>median [IQR]</th><th class="num">recommended winner's<br>true uptake</th>
+    <th class="num">top-decile recall</th><th class="num">winner in true top 1 / 5 / 10</th><th class="num">found true best</th><th class="num">picked true best</th>
+  </tr></thead><tbody id="rows"></tbody></table>
+  <div class="note" id="note"></div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const pct = (x) => `${Math.round(100 * x)}%`;
+let data, sel;
+const LABEL = { random: "random", descriptor: "descriptor-ranked", uniform: "uniform tier-2", sieve: "SIEVE (agents)" };
+function render() {
+  const arms = Object.keys(data.arms).sort((a, b) => (a === "sieve") - (b === "sieve"));
+  const col = (k) => Math.max(...arms.map((a) => { const m = data.arms[a].budgets[sel]; return m ? (m[k].median ?? m[k]) : -1; }));
+  const bestF = col("best_true_found"), bestR = col("recommended_true");
+  $("rows").innerHTML = arms.map((a) => {
+    const m = data.arms[a].budgets[sel]; if (!m) return "";
+    const q = (x, d = 3) => `${x.median.toFixed(d)} <span class="iqr">[${x.p25.toFixed(2)}–${x.p75.toFixed(2)}]</span>`;
+    return `<tr class="${a === "sieve" ? "sieve" : ""}"><td>${LABEL[a] || a} <span class="iqr">n=${m.n}</span></td>
+      <td class="num ${m.best_true_found.median === bestF ? "best" : ""}">${q(m.best_true_found)}</td>
+      <td class="num ${m.recommended_true.median === bestR ? "best" : ""}">${q(m.recommended_true)}</td>
+      <td class="num">${pct(m.decile_recall.median)}</td>
+      <td class="num">${pct(m.winner_top1)} / ${pct(m.winner_top5)} / ${pct(m.winner_top10)}</td>
+      <td class="num">${pct(m.reliability_found)}</td><td class="num">${pct(m.reliability_picked)}</td></tr>`;
+  }).join("");
+}
+fetch("/api/compare").then((r) => r.json()).then((d) => {
+  data = d;
+  if (!d.truth) { $("lead").textContent = "No arena report yet: python -m sieve.arena_eval seeds, then report."; return; }
+  $("lead").textContent = `${d.truth.n} structures with exhaustive tier-2 ground truth; true best ${d.truth.best_set.join(", ")} at ${d.truth.top_value.toFixed(3)} mol/kg. Measurements in the seeds are replayed around that truth with noise fitted from real repeated GCMC (tier 1 ≈ 7%, tier 2 ≈ 1%).`;
+  const budgets = Object.keys(Object.values(d.arms)[0].budgets);
+  sel = budgets[budgets.length - 1];
+  $("budgets").innerHTML = budgets.map((b) => `<button data-b="${b}" class="${b === sel ? "on" : ""}">${b} CPU-h</button>`).join("");
+  $("budgets").onclick = (e) => { if (!e.target.dataset.b) return; sel = e.target.dataset.b; document.querySelectorAll(".budgets button").forEach((x) => x.classList.toggle("on", x.dataset.b === sel)); render(); };
+  $("note").textContent = "0.127 CPU-h matches the full task's pressure (4 CPU-h is 1.8% of an exhaustive tier-1 screen). 'Recommended winner' is the structure each arm would name; SIEVE names only tier-2-confirmed structures.";
+  render();
+});
+</script>
+</body>
+</html>

@@ -96,6 +96,39 @@ def run_seeds(arms: list[str], n: int, budget_s: float, start: int = 0) -> list[
     return done
 
 
+def run_sieve_seeds(n: int, budget_s: float, start: int = 0, parallel: int = 5) -> list[str]:
+    """SIEVE replay seeds. Model calls dominate wall time, so several seeds run concurrently."""
+    import asyncio
+
+    from sieve.agents.team import run as run_team
+
+    noise = load_noise()
+    model = Oracle(str(CALIBRATION_DB), "calibration", labels_path=None).fit_cost_model()
+    arena = arena_structures()
+    st = Store(REPLAY_DB)
+    todo = []
+    for seed in range(start, start + n):
+        rid = f"sieve-replay-s{seed}"
+        row = st.con.execute("SELECT status FROM runs WHERE run_id=?", (rid,)).fetchone()
+        if not (row and row[0] == "finished"):
+            todo.append((seed, rid))
+
+    async def main():
+        sem = asyncio.Semaphore(parallel)
+
+        async def one(seed, rid):
+            async with sem:
+                try:
+                    return await run_team(str(REPLAY_DB), budget_s, 1, seed, run_id=rid, cost_model=model,
+                                          candidates=arena,
+                                          replay={"truth_db": str(ARENA_DB), "seed": seed, "noise": asdict(noise)})
+                except Exception as e:  # one failed seed must not stop the others
+                    print(f"{rid} failed: {type(e).__name__}: {e}", flush=True)
+        return await asyncio.gather(*(one(s, r) for s, r in todo))
+
+    return [r for r in asyncio.run(main()) if r]
+
+
 def report(db: Path = REPLAY_DB, budgets_h: list[float] | None = None) -> dict:
     truth = Truth.load(str(ARENA_DB))
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
@@ -115,13 +148,19 @@ def main() -> None:
     s.add_argument("--start", type=int, default=0)
     s.add_argument("--budget-h", type=float, default=1.0)
     s.add_argument("--arms", default="random,descriptor,uniform")
+    s.add_argument("--parallel", type=int, default=5)
     r = sub.add_parser("report")
     r.add_argument("--db", default=str(REPLAY_DB))
     a = p.parse_args()
     if a.cmd == "calibrate":
         print(calibrate())
     elif a.cmd == "seeds":
-        print(run_seeds(a.arms.split(","), a.n, a.budget_h * 3600, a.start))
+        arms = a.arms.split(",")
+        if "sieve" in arms:
+            print(run_sieve_seeds(a.n, a.budget_h * 3600, a.start, a.parallel))
+        rest = [x for x in arms if x != "sieve"]
+        if rest:
+            print(run_seeds(rest, a.n, a.budget_h * 3600, a.start))
     else:
         print(json.dumps(report(Path(a.db)), indent=2))
 

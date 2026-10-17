@@ -122,6 +122,13 @@ def score_run(con: sqlite3.Connection, run_id: str, truth: Truth) -> RunScore:
             found_best=bool(truth.best_set & set(found)),
             picked_best=rec in truth.best_set if rec else False,
         ))
+    final = con.execute("SELECT payload_json FROM events WHERE run_id=? AND type='recommend' "
+                        "ORDER BY event_id DESC LIMIT 1", (run_id,)).fetchone()
+    if final and sc.points:
+        rec = json.loads(final[0]).get("structure")
+        p = sc.points[-1]
+        sc.points.append(Point(p.cpu_h, p.best_true_found, rec, truth.value.get(rec), truth.rank.get(rec),
+                               p.decile_recall, p.found_best, rec in truth.best_set))
     return sc
 
 

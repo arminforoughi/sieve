@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SIEVE Agent Flow</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/agents.css">
+</head>
+<body>
+<div class="ag-app">
+  <header class="ag-top">
+    <div class="brand">SIEVE</div>
+    <nav class="tabs">
+      <a id="tab-agents" class="on" href="#">Agents</a>
+      <a id="tab-room" href="#">Control room</a>
+      <a id="tab-disc" href="/discoveries">Discoveries</a>
+      <a id="tab-compare" href="/compare">Compare</a>
+    </nav>
+    <div class="ag-vitals">
+      <div class="kv"><span class="k">human interventions</span><span class="v mono big" id="a-int">0</span></div>
+      <div class="kv"><span class="k">round</span><span class="v mono" id="a-round">–</span></div>
+      <div class="kv"><span class="k">budget <em>CPU-h</em></span><span class="v mono"><span id="a-spent">0.00</span><span class="dim"> / <span id="a-budget">–</span></span></span><span class="bar"><i id="a-bar"></i></span></div>
+      <div class="kv"><span class="k">best found</span><span class="v mono" id="a-best">–</span><span class="sub" id="a-best-sub"></span></div>
+      <div class="kv"><span class="k">model calls <em>tokens</em></span><span class="v mono" id="a-tokens">–</span><span class="sub" id="a-split"></span></div>
+    </div>
+    <div class="runrow"><span class="badge" id="replay" hidden>REPLAY 20&times;</span><select id="run-select" aria-label="Run"></select></div>
+  </header>
+
+  <section class="panel ag-stage" aria-label="Agent team">
+    <div class="plabel">The team at work <span class="dim" id="stage-note"></span></div>
+    <svg id="stage" viewBox="0 0 1000 600" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Agents and messages"></svg>
+    <div id="bubbles"></div>
+    <div class="toast" id="toast" hidden></div>
+  </section>
+
+  <section class="panel ag-chat" aria-label="Conversation">
+    <div class="plabel">Conversation <span class="dim">· click a message for the model's reasoning</span></div>
+    <ol class="chat" id="chat"></ol>
+    <div class="empty" id="chat-empty">No agent messages yet. Baseline arms have no agents; choose a SIEVE run.</div>
+  </section>
+
+  <section class="panel ag-board" aria-label="Findings">
+    <div class="plabel">Findings <span class="dim">· the team's own measurements</span></div>
+    <ol class="board" id="board"></ol>
+  </section>
+
+  <section class="panel ag-timeline" aria-label="Rounds">
+    <div class="plabel">Rounds</div>
+    <div class="rounds" id="rounds"></div>
+  </section>
+</div>
+<script src="/static/agents.js"></script>
+</body>
+</html>
