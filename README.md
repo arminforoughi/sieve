@@ -99,3 +99,7 @@ On 9 paired measurements grid and direct agree within reported error (tier-2 dif
 
 Baselines are running. This section is filled in from `sieve status` and the referee report,
 including if SIEVE loses to the descriptor-ranked baseline.
+
+## License
+
+MIT, see [LICENSE](LICENSE). The Nemotron-Science-v1 excerpt in `data/library/` is CC-BY-4.0 (NVIDIA); RASPA2 is MIT.
