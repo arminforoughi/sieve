@@ -59,7 +59,7 @@ function renderSummary() {
   let html = stat("Status", esc(r.status), `${esc(r.arm)} arm · ${fx(r.spent_cpu_s / 3600)} of ${fx(r.budget_cpu_s / 3600)} CPU-h spent`)
     + stat("Measured by GCMC", `${r.n_t1} <small>T1</small> · ${r.n_t2} <small>T2</small>`, "distinct structures per tier")
     + stat(`Best confirmed ${tierTag(2)}`, b2 ? `${fx(b2.uptake)} <small>± ${fx(b2.err)}</small>` : "–", b2 ? `<a href="${sciURL(b2.structure)}">${esc(short(b2.structure))}</a>` : "no tier-2 confirmation yet: no winner can be named")
-    + stat(`Best screening value ${tierTag(1)}`, b1 ? `${fx(b1.uptake)} <small>± ${fx(b1.err)}</small>` : "–", b1 ? `<a href="${sciURL(b1.structure)}">${esc(short(b1.structure))}</a> · unconverged, rank only` : "–");
+    + stat(`Best not yet confirmed ${tierTag(1)}`, b1 ? `${fx(b1.uptake)} <small>± ${fx(b1.err)}</small>` : "–", b1 ? `<a href="${sciURL(b1.structure)}">${esc(short(b1.structure))}</a> · unconverged, rank only` : "–");
   if (top2 && b2 && top2.run_id !== r.run_id && top2.best_t2.uptake > b2.uptake + b2.err)
     html += `<div class="callout bad"><b>Not the best in the database.</b> ${esc(top2.run_id)} (${esc(top2.arm)}) confirmed <b>${esc(short(top2.best_t2.structure))}</b> at ${fx(top2.best_t2.uptake)} ± ${fx(top2.best_t2.err)} mol/kg, above this run's best confirmed ${esc(short(b2.structure))} at ${fx(b2.uptake)}. See <a href="/compare">Compare</a>.</div>`;
   if (r.status !== "finished") html += `<div class="callout info">This run is still in progress (${esc(r.status)}); the ranking will change as more structures are measured.</div>`;

@@ -2,70 +2,153 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SIEVE Compare</title>
+<title>SIEVE · Compare</title>
 <link rel="stylesheet" href="/static/shell.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
 <style>
-  .cmp { max-width: 1200px; margin: 0 auto; padding: 16px; }
-  .cmp h1 { font: 600 20px var(--sans); margin: 8px 0 4px; }
-  .cmp p.lead { color: var(--ink-2); margin: 0 0 16px; max-width: 900px; }
-  .nav { font-size: 13px; margin-bottom: 8px; } .nav a { color: var(--accent); text-decoration: none; }
-  .budgets { display: flex; gap: 6px; margin: 8px 0 12px; }
-  .budgets button { font: 12px var(--mono); border: 1px solid var(--border); background: var(--panel); border-radius: 4px; padding: 4px 10px; cursor: pointer; color: var(--ink-2); }
-  .budgets button.on { border-color: var(--ink-3); color: var(--ink); }
-  table.m { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; }
-  table.m th { text-align: left; font-size: 11px; color: var(--ink-3); font-weight: 600; padding: 10px 12px; border-bottom: 1px solid var(--border); }
-  table.m td { padding: 10px 12px; border-bottom: 1px solid var(--grid); font-size: 14px; }
-  table.m td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
-  table.m td .iqr { color: var(--ink-3); font-size: 12px; }
-  table.m tr.sieve td { background: var(--accent-soft); font-weight: 600; }
-  .best { color: var(--green); }
-  .note { color: var(--ink-3); font-size: 12px; margin-top: 10px; }
+  .cmp { display: flex; flex-direction: column; gap: var(--gap); }
+  .verdicts { display: flex; flex-direction: column; gap: 8px; }
+  .grid2 { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--gap); }
+  #chart svg { display: block; width: 100%; height: 300px; }
+  table.t tr.me td { background: var(--accent-soft); }
+  table.t td .iqr { color: var(--ink-3); font-size: 11.5px; }
+  table.t td.best { font-weight: 700; }
+  .armname { font-weight: 500; white-space: nowrap; }
 </style>
 </head>
 <body>
 <header class="shell" data-page="compare"></header>
 <script src="/static/shell.js"></script>
-<div class="cmp">
-  <h1>Arena: every arm, 20 seeds, scored against ground truth</h1>
-  <p class="lead" id="lead"></p>
-  <div class="budgets" id="budgets"></div>
-  <table class="m"><thead><tr>
-    <th>arm</th><th class="num">best true uptake found<br>median [IQR]</th><th class="num">recommended winner's<br>true uptake</th>
-    <th class="num">top-decile recall</th><th class="num">winner in true top 1 / 5 / 10</th><th class="num">found true best</th><th class="num">picked true best</th>
-  </tr></thead><tbody id="rows"></tbody></table>
-  <div class="note" id="note"></div>
-</div>
+<main class="page cmp">
+  <div class="page-head"><div>
+    <h1>Does SIEVE beat the baselines?</h1>
+    <p class="lead">Two kinds of evidence. The <b>full runs</b> screen the whole 12,020-structure pool once each on a 4 CPU-hour budget. The <b>arena</b> replays every arm over many seeds on 292 structures whose true tier-2 uptake is known, so the answer is a distribution, not one lucky run. Losses are shown as plainly as wins.</p>
+  </div></div>
+  <div class="verdicts" id="verdicts"><div class="card"><span class="spin"></span> Loading…</div></div>
+
+  <section class="card">
+    <h2>Full runs on the 12,020-structure pool <span class="sub">one run per arm · as measured by each arm itself</span></h2>
+    <div class="tbl-wrap"><table class="t" id="runs"></table></div>
+    <p class="note" style="margin:8px 0 0"><span class="tier t2">T2</span> confirmed (400 + 2000 cycles). <span class="tier t1">T1</span> unconverged screening value (100 + 500 cycles, nominal ±18%): a rank, not a result. Uptake mol/kg at 298 K, 1 bar ± 1σ.</p>
+  </section>
+
+  <div class="grid2">
+    <section class="card">
+      <h2>Arena: best true uptake found vs budget <span class="sub">median over seeds</span></h2>
+      <div class="legend-row" id="legend"></div>
+      <div id="chart"><svg></svg></div>
+    </section>
+    <section class="card">
+      <h2>Arena scorecard <span class="sub" id="truth"></span>
+        <span class="tools"><span class="seg" id="budgets"></span></span></h2>
+      <div class="tbl-wrap"><table class="t" id="rows"></table></div>
+      <p class="note" style="margin:8px 0 0" id="note"></p>
+    </section>
+  </div>
+</main>
 <script>
+"use strict";
 const $ = (id) => document.getElementById(id);
-const pct = (x) => `${Math.round(100 * x)}%`;
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const pct = (x) => (x == null ? "–" : `${Math.round(100 * x)}%`);
+const fx = (x, k = 2) => (x == null ? "–" : Number(x).toFixed(k));
+const short = (s) => (s || "").replace(/_clean$/, "");
+const LABEL = { random: "random", descriptor: "descriptor-ranked", uniform: "uniform tier-2", sieve: "SIEVE v3 (Nemotron)", "sieve-dsv4": "SIEVE v3 (DeepSeek-V4 planner)", "sieve-v4": "SIEVE v4 (sub-agents)", "sieve-v4-omni": "SIEVE v4 (Omni Nano roles)" };
+const lab = (a) => LABEL[a] || a;
+const STY = { random: { c: "#15171C", d: "2 3" }, descriptor: { c: "#7C828E", d: "7 4" }, uniform: { c: "#A9AEB7", d: "8 3 2 3" } };
+const SIEVE_C = ["#0B8A98", "#06525C", "#5FC3CD", "#2E6F8E"];
+const sty = (a, arms) => a.startsWith("sieve") ? { c: SIEVE_C[arms.filter((x) => x.startsWith("sieve")).indexOf(a) % 4], d: null, w: 2.2 } : { ...(STY[a] || { c: "#7C828E", d: "4 2" }), w: 1.4 };
 let data, sel;
-const LABEL = { random: "random", descriptor: "descriptor-ranked", uniform: "uniform tier-2", sieve: "SIEVE v3 (Nemotron Super/Nano)", "sieve-dsv4": "SIEVE v3 (DeepSeek-V4-Pro planner)", "sieve-v4": "SIEVE v4 (sub-agents, Nemotron)", "sieve-v4-omni": "SIEVE v4 (Omni-Reasoning Nano roles)" };
+
+async function boot() {
+  const [runs, cmp] = await Promise.all([fetch("/api/runs/summary").then((r) => r.json()).catch(() => []),
+    fetch("/api/compare").then((r) => r.json()).catch(() => ({ arms: {} }))]);
+  data = cmp;
+  const v = [];
+  // full-run verdict
+  const t2 = runs.filter((r) => r.best_t2).sort((a, b) => b.best_t2.uptake - a.best_t2.uptake);
+  const sv = runs.find((r) => r.arm === "sieve");
+  if (sv && t2.length) {
+    const top = t2[0], mine = sv.best_t2;
+    if (top.run_id !== sv.run_id && (!mine || top.best_t2.uptake > mine.uptake))
+      v.push(`<div class="callout bad"><b>Full pool: a baseline is ahead.</b> ${esc(top.run_id)} (${esc(top.arm)}) confirmed <b>${esc(short(top.best_t2.structure))}</b> at ${fx(top.best_t2.uptake)} ± ${fx(top.best_t2.err)} mol/kg; ${esc(sv.run_id)}'s best confirmed is ${mine ? `<b>${esc(short(mine.structure))}</b> at ${fx(mine.uptake)} ± ${fx(mine.err)}` : "nothing yet"}${sv.status !== "finished" ? ` (run still ${esc(sv.status)})` : ""}.</div>`);
+    else v.push(`<div class="callout info"><b>Full pool: SIEVE holds the best confirmed value</b> (${esc(short(mine.structure))}, ${fx(mine.uptake)} ± ${fx(mine.err)} mol/kg).</div>`);
+  }
+  // arena verdict at the largest budget
+  const arms = Object.keys(cmp.arms || {});
+  if (cmp.truth && arms.length) {
+    const budgets = Object.keys(cmp.arms[arms[0]].budgets).sort((p, q) => p - q);
+    const b = budgets[budgets.length - 1], med = (a) => (cmp.arms[a].budgets[b] || {}).best_true_found?.median;
+    const base = arms.filter((a) => !a.startsWith("sieve")), bestBase = base.sort((x, y) => (med(y) ?? -1) - (med(x) ?? -1))[0];
+    for (const a of arms.filter((x) => x.startsWith("sieve"))) {
+      const m = med(a), mb = med(bestBase);
+      if (m == null || mb == null) continue;
+      const win = m > mb + 1e-9;
+      v.push(`<div class="callout ${win ? "info" : "bad"}"><b>Arena, ${b} CPU-h: ${esc(lab(a))} ${win ? "beats" : "does not beat"} ${esc(lab(bestBase))}.</b> Median best true uptake found ${fx(m)} vs ${fx(mb)} mol/kg over ${cmp.arms[a].budgets[b].n} vs ${cmp.arms[bestBase].budgets[b].n} seeds (true best in the arena: ${fx(cmp.truth.top_value)}).</div>`);
+    }
+  }
+  $("verdicts").innerHTML = v.join("") || `<div class="callout">Not enough finished runs to compare yet.</div>`;
+  renderRuns(runs);
+  if (!cmp.truth) { $("rows").innerHTML = `<tbody><tr><td class="note">No arena report yet: python -m sieve.arena_eval seeds, then report.</td></tr></tbody>`; return; }
+  $("truth").textContent = `· ${cmp.truth.n} structures, true best ${cmp.truth.best_set.map(short).join(", ")} at ${fx(cmp.truth.top_value)} mol/kg`;
+  const budgets = Object.keys(Object.values(cmp.arms)[0].budgets).sort((p, q) => p - q);
+  sel = budgets[budgets.length - 1];
+  $("budgets").innerHTML = budgets.map((b) => `<button data-b="${b}" class="${b === sel ? "on" : ""}">${b} h</button>`).join("");
+  $("budgets").onclick = (e) => { if (!e.target.dataset.b) return; sel = e.target.dataset.b; document.querySelectorAll("#budgets button").forEach((x) => x.classList.toggle("on", x.dataset.b === sel)); render(); };
+  $("note").textContent = "Arena measurements are replayed around the ground truth with noise fitted from repeated real GCMC (tier 1 ≈ 7%, tier 2 ≈ 1%). 0.127 CPU-h matches the full task's pressure (4 CPU-h is 1.8% of an exhaustive tier-1 screen). 'Recommended' is the structure each arm would name; SIEVE names only tier-2-confirmed structures, so a recommended value of 0.00 means it named no tier-2-confirmed winner within that budget. IQR in brackets.";
+  render(); chart();
+  new ResizeObserver(() => chart()).observe($("chart"));
+}
+
+function renderRuns(runs) {
+  const top = Math.max(...runs.map((r) => (r.best_t2 ? r.best_t2.uptake : -1)));
+  const b = (x, t) => (x ? `<span class="tier t${t}">T${t}</span> ${fx(x.uptake)} <span class="pm">± ${fx(x.err)}</span><br><a href="/science?name=${encodeURIComponent(x.structure)}">${esc(short(x.structure))}</a>` : "–");
+  $("runs").innerHTML = `<thead><tr><th>run</th><th>arm</th><th>status</th><th class="n">CPU-h spent</th><th class="n">measured T1 / T2</th><th class="n">best confirmed</th><th class="n">best unconfirmed</th></tr></thead><tbody>`
+    + runs.map((r) => `<tr class="${r.arm === "sieve" ? "me" : ""}"><td class="mono"><a href="/discoveries?run=${encodeURIComponent(r.run_id)}">${esc(r.run_id)}</a></td><td>${esc(r.arm)}</td><td>${esc(r.status)}</td>
+      <td class="n">${fx(r.spent_cpu_s / 3600)}${r.budget_cpu_s < 3.6e6 ? ` / ${fx(r.budget_cpu_s / 3600)}` : " <span class=\"dim\">(no cap)</span>"}</td><td class="n">${r.n_t1} / ${r.n_t2}</td>
+      <td class="n ${r.best_t2 && r.best_t2.uptake === top ? "best" : ""}">${b(r.best_t2, 2)}</td><td class="n">${b(r.best_t1, 1)}</td></tr>`).join("") + `</tbody>`;
+}
+
 function render() {
   const arms = Object.keys(data.arms).sort((a, b) => a.startsWith("sieve") - b.startsWith("sieve"));
   const col = (k) => Math.max(...arms.map((a) => { const m = data.arms[a].budgets[sel]; return m ? (m[k].median ?? m[k]) : -1; }));
   const bestF = col("best_true_found"), bestR = col("recommended_true");
-  $("rows").innerHTML = arms.map((a) => {
-    const m = data.arms[a].budgets[sel]; if (!m) return "";
-    const q = (x, d = 3) => `${x.median.toFixed(d)} <span class="iqr">[${x.p25.toFixed(2)}–${x.p75.toFixed(2)}]</span>`;
-    return `<tr class="${a.startsWith("sieve") ? "sieve" : ""}"><td>${LABEL[a] || a} <span class="iqr">n=${m.n}</span></td>
-      <td class="num ${m.best_true_found.median === bestF ? "best" : ""}">${q(m.best_true_found)}</td>
-      <td class="num ${m.recommended_true.median === bestR ? "best" : ""}">${q(m.recommended_true)}</td>
-      <td class="num">${pct(m.decile_recall.median)}</td>
-      <td class="num">${pct(m.winner_top1)} / ${pct(m.winner_top5)} / ${pct(m.winner_top10)}</td>
-      <td class="num">${pct(m.reliability_found)}</td><td class="num">${pct(m.reliability_picked)}</td></tr>`;
-  }).join("");
+  const q = (x) => `${x.median.toFixed(2)} <span class="iqr">[${x.p25.toFixed(2)}–${x.p75.toFixed(2)}]</span>`;
+  $("rows").innerHTML = `<thead><tr><th>arm</th><th class="n">best true found</th><th class="n">recommended's true</th><th class="n">top-10% recall</th><th class="n">winner in top 1 / 5 / 10</th></tr></thead><tbody>`
+    + arms.map((a) => {
+      const m = data.arms[a].budgets[sel]; if (!m) return "";
+      return `<tr class="${a.startsWith("sieve") ? "me" : ""}"><td class="armname">${esc(lab(a))} <span class="iqr dim">n=${m.n}</span></td>
+        <td class="n ${m.best_true_found.median === bestF ? "best" : ""}">${q(m.best_true_found)}</td>
+        <td class="n ${m.recommended_true.median === bestR ? "best" : ""}">${q(m.recommended_true)}</td>
+        <td class="n">${pct(m.decile_recall.median)}</td><td class="n">${pct(m.winner_top1)} / ${pct(m.winner_top5)} / ${pct(m.winner_top10)}</td></tr>`;
+    }).join("") + `</tbody>`;
 }
-fetch("/api/compare").then((r) => r.json()).then((d) => {
-  data = d;
-  if (!d.truth) { $("lead").textContent = "No arena report yet: python -m sieve.arena_eval seeds, then report."; return; }
-  $("lead").textContent = `${d.truth.n} structures with exhaustive tier-2 ground truth; true best ${d.truth.best_set.join(", ")} at ${d.truth.top_value.toFixed(3)} mol/kg. Measurements in the seeds are replayed around that truth with noise fitted from real repeated GCMC (tier 1 ≈ 7%, tier 2 ≈ 1%).`;
-  const budgets = Object.keys(Object.values(d.arms)[0].budgets);
-  sel = budgets[budgets.length - 1];
-  $("budgets").innerHTML = budgets.map((b) => `<button data-b="${b}" class="${b === sel ? "on" : ""}">${b} CPU-h</button>`).join("");
-  $("budgets").onclick = (e) => { if (!e.target.dataset.b) return; sel = e.target.dataset.b; document.querySelectorAll(".budgets button").forEach((x) => x.classList.toggle("on", x.dataset.b === sel)); render(); };
-  $("note").textContent = "0.127 CPU-h matches the full task's pressure (4 CPU-h is 1.8% of an exhaustive tier-1 screen). 'Recommended winner' is the structure each arm would name; SIEVE names only tier-2-confirmed structures.";
-  render();
-});
+
+function chart() {
+  const el = $("chart").querySelector("svg"), W = Math.max(300, el.clientWidth || 500), H = 300, m = { l: 48, r: 16, t: 12, b: 40 };
+  const svg = d3.select(el).attr("viewBox", `0 0 ${W} ${H}`); svg.selectAll("*").remove();
+  const arms = Object.keys(data.arms), budgets = Object.keys(data.arms[arms[0]].budgets).map(Number).sort((p, q) => p - q);
+  const pts = (a) => budgets.map((b) => ({ b, m: (data.arms[a].budgets[String(b)] || {}).best_true_found })).filter((p) => p.m);
+  const all = arms.flatMap((a) => pts(a).map((p) => p.m.median));
+  const x = d3.scaleLog().domain([d3.min(budgets) * 0.9, d3.max(budgets) * 1.1]).range([m.l, W - m.r]);
+  const y = d3.scaleLinear().domain([Math.floor(d3.min(all) - 0.5), Math.max(d3.max(all), data.truth.top_value) + 0.3]).nice().range([H - m.b, m.t]);
+  svg.append("g").attr("class", "gridl").attr("transform", `translate(${m.l},0)`).call(d3.axisLeft(y).ticks(5).tickSize(-(W - m.l - m.r)).tickFormat(""));
+  svg.append("g").attr("class", "axis").attr("transform", `translate(0,${H - m.b})`).call(d3.axisBottom(x).tickValues(budgets).tickFormat((d) => `${d}`));
+  svg.append("g").attr("class", "axis").attr("transform", `translate(${m.l},0)`).call(d3.axisLeft(y).ticks(5));
+  svg.append("text").attr("class", "lbl").attr("x", (m.l + W - m.r) / 2).attr("y", H - 6).attr("text-anchor", "middle").text("budget (CPU-hours, log scale)");
+  svg.append("text").attr("class", "lbl").attr("transform", `translate(12,${(m.t + H - m.b) / 2}) rotate(-90)`).attr("text-anchor", "middle").text("best true uptake found (mol/kg)");
+  svg.append("line").attr("x1", m.l).attr("x2", W - m.r).attr("y1", y(data.truth.top_value)).attr("y2", y(data.truth.top_value)).attr("stroke", "#4A505B").attr("stroke-dasharray", "3 3");
+  svg.append("text").attr("class", "lbl ink").attr("x", m.l + 4).attr("y", y(data.truth.top_value) - 4).text(`true best ${data.truth.top_value.toFixed(2)}`);
+  const line = d3.line().x((p) => x(p.b)).y((p) => y(p.m.median));
+  for (const a of arms.slice().sort((p, q) => p.startsWith("sieve") - q.startsWith("sieve"))) {
+    const s = sty(a, arms), P = pts(a);
+    svg.append("path").attr("d", line(P)).attr("fill", "none").attr("stroke", s.c).attr("stroke-width", s.w).attr("stroke-dasharray", s.d);
+    svg.selectAll(null).data(P).enter().append("circle").attr("cx", (p) => x(p.b)).attr("cy", (p) => y(p.m.median)).attr("r", 2.6).attr("fill", s.c)
+      .append("title").text((p) => `${lab(a)} · ${p.b} CPU-h: median ${p.m.median.toFixed(2)} [${p.m.p25.toFixed(2)}–${p.m.p75.toFixed(2)}]`);
+  }
+  $("legend").innerHTML = arms.map((a) => { const s = sty(a, arms); return `<span><svg width="26" height="10"><line x1="1" x2="25" y1="5" y2="5" stroke="${s.c}" stroke-width="${s.w}" ${s.d ? `stroke-dasharray="${s.d}"` : ""}/></svg>${esc(lab(a))}</span>`; }).join("");
+}
+boot();
 </script>
 </body>
 </html>

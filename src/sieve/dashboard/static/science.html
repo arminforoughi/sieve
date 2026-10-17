@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SIEVE · Science</title>
+<link rel="stylesheet" href="/static/shell.css">
+<link rel="stylesheet" href="/static/science.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.4.0/3Dmol-min.js"></script>
+</head>
+<body>
+<header class="shell" data-page="science"></header>
+<script src="/static/shell.js"></script>
+<main class="page sci">
+  <section class="picker card" aria-label="Choose a structure">
+    <div class="search">
+      <input type="search" id="q" placeholder="Search 12,020 pool structures by CSD/CoRE name, e.g. ZADREE, QIPROY…" autocomplete="off" spellcheck="false" aria-label="Search structures" aria-controls="results">
+      <ul id="results" class="results" role="listbox" hidden></ul>
+    </div>
+    <div class="presets" id="presets" aria-label="Computed structures"></div>
+  </section>
+
+  <section class="sci-head">
+    <div class="ident">
+      <div class="eyebrow" id="role">&nbsp;</div>
+      <h1 id="title">Loading…</h1>
+      <div class="tags" id="tags"></div>
+    </div>
+    <div class="exports" aria-label="Downloads">
+      <a class="btn sm" id="dl-cif" download>CIF</a>
+      <a class="btn sm" id="dl-csv" download>Isotherm CSV</a>
+      <a class="btn sm" id="dl-cube" download>Energy cube</a>
+      <a class="btn sm" id="dl-json" download>JSON</a>
+    </div>
+  </section>
+
+  <div class="kpis" id="kpis"></div>
+  <div class="callout info status" id="status" hidden></div>
+  <p class="caveat-line">Simulated with <b>SieveUFF</b> (UFF Lennard-Jones + TraPPE CO₂) and <b>no framework charges</b>: binding here is geometric/van der Waals only, so open-metal-site MOFs are under-predicted. Values rank structures; they are not experimental predictions. <a href="#methods">Methods &amp; caveats</a></p>
+
+  <div class="sci-grid">
+    <section class="card viewer" aria-label="3D binding pockets">
+      <h2>Binding pockets in 3D <span class="sub">isosurfaces of the CO₂-oxygen probe energy</span></h2>
+      <div class="vtools">
+        <label><input type="checkbox" id="L-fw" checked> framework</label>
+        <label><input type="checkbox" id="L-pk" checked> pockets</label>
+        <label><input type="checkbox" id="L-co2" checked> CO₂ snapshots</label>
+        <label class="iso">threshold <input type="range" id="iso" min="-20" max="-4" step="1" value="-10" aria-label="Pocket threshold kJ/mol"> <b id="iso-v" class="mono">−10</b> kJ/mol</label>
+        <button class="btn sm" id="spin" aria-pressed="false">Rotate</button>
+        <button class="btn sm" id="reset">Reset view</button>
+      </div>
+      <div class="glbox"><div id="gl"></div><div class="wait" id="wait"><span><span class="spin"></span> Loading structure…</span></div></div>
+      <div class="vlegend" id="vlegend"></div>
+      <p class="cap" id="cap"></p>
+    </section>
+    <div class="col">
+      <section class="card" id="iso-card">
+        <h2>CO₂ adsorption isotherm <span class="sub">298 K · GCMC · mean ± 1σ (block average)</span></h2>
+        <div class="legend-row" id="iso-legend"></div>
+        <div class="chart" id="iso-chart"><svg></svg></div>
+      </section>
+      <section class="card" id="hist-card">
+        <h2>Pocket-energy distribution <span class="sub">share of accessible pore volume</span>
+          <span class="tools"><label class="note" for="hist-vs">vs</label><select id="hist-vs"></select></span></h2>
+        <div class="legend-row" id="hist-legend"></div>
+        <div class="chart" id="hist-chart"><svg></svg></div>
+      </section>
+    </div>
+  </div>
+
+  <section class="card" aria-label="Comparison with reference MOFs">
+    <h2>Side by side with reference MOFs <span class="sub">same force field, same protocol; literature values for orientation only</span></h2>
+    <div class="tbl-wrap"><table class="t cmp" id="cmp"></table></div>
+  </section>
+
+  <div class="sci-grid2">
+    <section class="card review" aria-label="Peer review">
+      <h2>Peer review <span class="sub" id="rv-sub">a reviewer agent checks each claim of the analyst's write-up against the data</span></h2>
+      <div id="review"></div>
+    </section>
+    <div class="col">
+      <section class="card" aria-label="Screening measurements">
+        <h2>Screening-run measurements <span class="sub">every GCMC evaluation of this structure in data/runs.db</span></h2>
+        <div id="meas"></div>
+      </section>
+      <section class="card methods" id="methods" aria-label="Methods and caveats">
+        <h2>Methods &amp; caveats</h2>
+        <dl>
+          <dt>Force field</dt><dd><b>SieveUFF</b>: UFF Lennard-Jones on every framework atom; TraPPE CO₂ (3-site, rigid). Lorentz–Berthelot mixing, 12.8 Å cutoff, potential shifted, no tail corrections. <b>No framework partial charges</b> (RASPA <code>ChargeMethod None</code>).</dd>
+          <dt>Simulation</dt><dd>RASPA2 grand-canonical Monte Carlo, 298 K, rigid framework, absolute loading in mol/kg (= mmol/g). Supercells sized for the cutoff. Uncertainty is RASPA's block-average σ.</dd>
+          <dt>Tiers</dt><dd>
+            <span class="tier t0">T0</span> descriptors only (CoRE MOF/Zeo++: PLD, LCD, void fraction, density, metals); no uptake.<br>
+            <span class="tier t1">T1</span> GCMC 100 init + 500 cycles at 1 bar, nominal ±18%: <b>not converged, used only to rank</b>.<br>
+            <span class="tier t2">T2</span> GCMC 400 init + 2000 cycles at 1 bar, nominal ±8.6%: the only tier a winner may be named on.</dd>
+          <dt>This page</dt><dd>Isotherm: 150 init + 500 cycles at 0.05–5 bar. Pockets: RASPA's 0.5 Å energy grid for the CO₂ oxygen probe; "strong" = below −10 kJ/mol. Run outside every screening budget and cached in <code>data/science/</code>.</dd>
+          <dt>Caveats</dt><dd>Without charges, CO₂'s quadrupole never meets the framework's field, so electrostatically binding sites (open Mg²⁺/Cu²⁺, amines) are missed: Mg-MOF-74 comes out far below experiment. No framework flexibility, no water, no competitive N₂ adsorption. Treat uptakes as a ranking signal for this model, not a lab prediction.</dd>
+        </dl>
+      </section>
+    </div>
+  </div>
+</main>
+<script src="/static/science.js"></script>
+</body>
+</html>

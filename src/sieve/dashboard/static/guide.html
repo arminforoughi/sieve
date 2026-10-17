@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SIEVE · How to use</title>
+<link rel="stylesheet" href="/static/shell.css">
+<style>
+  .guide { max-width: 1100px; }
+  .gg { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--gap); }
+  @media (max-width: 900px) { .gg { grid-template-columns: minmax(0, 1fr); } }
+  .card p, .card li { font-size: 14px; line-height: 1.55; color: var(--ink); }
+  .card p { margin: 0 0 8px; } .card ul, .card ol { margin: 0 0 8px; padding-left: 20px; }
+  .card li { margin: 3px 0; }
+  .full { grid-column: 1 / -1; }
+  pre { background: var(--bg); border: 1px solid var(--grid); border-radius: 6px; padding: 10px 12px; font: 12.5px/1.6 var(--mono); overflow-x: auto; margin: 6px 0 10px; }
+  .pages dt { font-weight: 600; margin-top: 8px; } .pages dd { margin: 2px 0 0; color: var(--ink-2); font-size: 13.5px; }
+</style>
+</head>
+<body>
+<header class="shell" data-page="guide"></header>
+<script src="/static/shell.js"></script>
+<main class="page guide">
+  <div class="page-head"><div>
+    <h1>What SIEVE is, and how to read it</h1>
+    <p class="lead">A short guide for a materials scientist who wants to know what these numbers are, how far to trust them, and how to reproduce them.</p>
+  </div></div>
+  <div class="gg">
+    <section class="card full">
+      <h2>The question it answers</h2>
+      <p><b>Which metal–organic frameworks, out of 12,020 CoRE MOF structures, adsorb the most CO₂ at 298 K and 1 bar, in one fixed molecular model, on a budget of 4 CPU-hours?</b> An exhaustive screen at the cheapest useful fidelity would need roughly 220 CPU-hours, so most structures are never simulated. LLM agents (orchestrator, scout, allocator, critic, analyst) decide which structures to simulate and at which fidelity; three fixed-policy baselines (random, descriptor-ranked, uniform tier-2) get the same budget so the agents can be judged.</p>
+      <p>SIEVE <b>ranks</b> structures within its model. It does not predict laboratory uptake.</p>
+    </section>
+
+    <section class="card">
+      <h2>Reading tiers and error bars</h2>
+      <ul>
+        <li><span class="tier t0">T0</span> descriptors only (pore-limiting and largest cavity diameter, void fraction, density, metals). Costs seconds; no uptake.</li>
+        <li><span class="tier t1">T1</span> short GCMC (100 + 500 cycles at 1 bar). <b>Not converged</b>: nominal ±18%. Good for deciding what to look at next, never for naming a winner.</li>
+        <li><span class="tier t2">T2</span> confirmed GCMC (400 + 2000 cycles), nominal ±8.6%. A run may only recommend a structure that reached tier 2.</li>
+      </ul>
+      <p>Uptake is absolute loading in mol/kg (= mmol/g). The ± is one standard deviation from RASPA's block averages: it is the statistical noise of the simulation, not the error of the model. Two structures whose intervals overlap at tier 1 are not distinguishable.</p>
+    </section>
+
+    <section class="card">
+      <h2>Limitations to keep in mind</h2>
+      <ul>
+        <li><b>No framework charges.</b> The force field (UFF Lennard-Jones + TraPPE CO₂, Lorentz–Berthelot, 12.8 Å cutoff, shifted) has no electrostatics with the framework, so open metal sites and other polar binding sites are under-rated. Mg-MOF-74 comes out near 1.7 mol/kg here, against roughly 8 in experiment.</li>
+        <li>Rigid frameworks, pure CO₂, no water, no N₂ competition: selectivity and humid performance are not addressed.</li>
+        <li>The CoRE structures are taken as given (solvent removed, as curated); disorder and missing hydrogens are not repaired.</li>
+        <li>Budgeted search can miss the best structure. The arena on the Compare page measures how often each arm does.</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>The pages</h2>
+      <dl class="pages">
+        <dt><a href="/">Control room</a></dt><dd>A run as it happens: budget, worker slots, the current best, every event.</dd>
+        <dt><a href="/agents">Agents</a></dt><dd>What each agent said and decided, round by round, including critic vetoes.</dd>
+        <dt><a href="/discoveries">Discoveries</a></dt><dd>Leaderboard of every structure measured by GCMC, sortable, with descriptors and CSV export.</dd>
+        <dt><a href="/science">Science</a></dt><dd>One structure in depth: binding pockets, the 0.05–5 bar isotherm, the pocket-energy distribution, a side-by-side with HKUST-1 and Mg-MOF-74, a peer review of every claim, and downloads (CIF, isotherm CSV, energy cube, JSON). Any pool structure can be searched; uncomputed ones take minutes.</dd>
+        <dt><a href="/compare">Compare</a></dt><dd>Whether SIEVE beats the baselines, on the full pool and over many seeds on a 292-structure arena with known answers.</dd>
+      </dl>
+    </section>
+
+    <section class="card">
+      <h2>Reproduce</h2>
+      <p>From the repository root, with the project's virtual environment:</p>
+<pre>python -m sieve sieve --budget-h 4             # the agent team
+python -m sieve baseline random --budget-h 4    # also: descriptor, uniform
+python -m sieve resume &lt;run_id&gt;               # continue a crashed run
+python -m sieve status [&lt;run_id&gt;]
+python -m sieve dashboard --port 8770           # this dashboard</pre>
+      <p>Everything a run does is recorded in <code>data/runs.db</code> (evaluations, tasks, events), so a run can be replayed (<code>dashboard --demo-replay &lt;run_id&gt;</code>) and audited. Science-page results are cached in <code>data/science/</code>.</p>
+    </section>
+
+    <section class="card full">
+      <h2>Honest status</h2>
+      <p>On the full pool so far, a baseline (uniform tier-2) holds the best confirmed structure (ZADREE, about 9.6 mol/kg), above SIEVE's best confirmed one. Across arena seeds SIEVE does not yet beat random search on median best-found uptake. See <a href="/compare">Compare</a> for the current numbers; they update as runs finish.</p>
+    </section>
+  </div>
+</main>
+</body>
+</html>
