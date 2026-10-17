@@ -1,24 +1,32 @@
 """The oracle: the only module that runs simulations or reads labels.csv.
 
 Three fidelity tiers behind one interface:
-  tier 0  pymatgen CIF parse -> geometric descriptors (proxy only)
-  tier 1  RASPA2 GCMC, 500 cycles + 100 init   (nominal +/- 18%, NOT converged)
-  tier 2  RASPA2 GCMC, 2000 cycles + 400 init  (nominal +/- 8.6%)
+  tier 0  pymatgen parse -> descriptors + a RASPA-ready P1 CIF (proxy only, no simulation)
+  tier 1  GCMC, 500 cycles + 100 init   (nominal +/- 18%, NOT converged)
+  tier 2  GCMC, 2000 cycles + 400 init  (nominal +/- 8.6%)
 
-Every call is logged to SQLite (`evaluations`, plus `timeouts` on a kill). The budget ledger
-is *derived* from that log -- spent = sum of measured child CPU-seconds -- so there is no
-separate counter that can drift from the record after a crash.
+A tier-1/2 call runs either "direct" (framework LJ summed explicitly every move) or "grid"
+(framework energy tabulated once per structure at 0.3 A, then interpolated). The grid costs
+O(grid points x framework atoms) to build but makes MC nearly independent of framework size, and
+it is reused by later calls on the same structure (tier 1 -> tier 2). plan() picks the cheaper.
 
-Uptake reported is ABSOLUTE loading in mol/kg at 298 K / 1 bar. Absolute loading does not
-depend on the helium void fraction; excess loading does, and is recorded but not ranked on.
+Every call is logged to SQLite (`evaluations`, plus `timeouts` on a kill). The budget ledger is
+*derived* from that log -- spent = sum of measured child CPU-seconds -- so there is no separate
+counter that can drift from the record after a crash.
+
+Uptake is ABSOLUTE CO2 loading in mol/kg at 298 K / 1 bar under SieveUFF (UFF framework, TraPPE
+CO2, no framework charges). Use it to RANK structures, not as a prediction of measured uptake.
 """
 
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import math
 import os
+import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -26,10 +34,19 @@ import tempfile
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
+from functools import lru_cache
 from pathlib import Path
 
-CUTOFF_A = 12.8  # RASPA2.create_script hardcodes CutOff 12.8
+from sieve import forcefield
+
+CUTOFF_A = 12.8
 DEFAULT_BUDGET_CPU_S = 4 * 3600.0
+GRID_SPACING_A = 0.3  # IRMOF-1: 0.661 +/- 0.058 (0.3 A grid) vs 0.696 +/- 0.079 direct
+GRID_CACHE_CAP_BYTES = int(float(os.environ.get("SIEVE_GRID_CACHE_GB", "1.0")) * 1e9)
+GRID_PIN_S = 900.0  # never evict a grid used in the last 15 minutes
+CACHE_ROOT = Path(os.environ.get("SIEVE_CACHE", Path.home() / ".cache" / "sieve"))
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+CORE_CSV = PROJECT_ROOT / "data" / "raw" / "2019-11-01-ASR-public_12020.csv"
 
 
 @dataclass(frozen=True)
@@ -42,22 +59,21 @@ class Tier:
 
 
 TIERS = {
-    1: Tier(1, cycles=500, init_cycles=100, nominal_rel_err=0.18, max_timeout_s=180.0),
-    2: Tier(2, cycles=2000, init_cycles=400, nominal_rel_err=0.086, max_timeout_s=720.0),
+    1: Tier(1, cycles=500, init_cycles=100, nominal_rel_err=0.18, max_timeout_s=240.0),
+    2: Tier(2, cycles=2000, init_cycles=400, nominal_rel_err=0.086, max_timeout_s=900.0),
 }
 
-# Cost prior, CPU-s ~= a + b * (init+cycles) * framework_atoms_in_supercell.
-# Calibrated on IRMOF-1 tier 1 (424 atoms, 1x1x1, 600 cycles -> 12.6 s on Apple M-series).
-# The orchestrator refines this from the evaluations log via fit_cost_model().
-COST_PRIOR_A = 0.6
-COST_PRIOR_B = 4.7e-5
 
-METALS = {
-    "Li", "Be", "Na", "Mg", "Al", "K", "Ca", "Sc", "Ti", "V", "Cr", "Mn", "Fe", "Co", "Ni", "Cu",
-    "Zn", "Ga", "Rb", "Sr", "Y", "Zr", "Nb", "Mo", "Ru", "Rh", "Pd", "Ag", "Cd", "In", "Sn", "Cs",
-    "Ba", "La", "Ce", "Pr", "Nd", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb", "Lu", "Hf",
-    "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg", "Pb", "Bi", "U",
-}
+@dataclass(frozen=True)
+class CostModel:
+    """CPU-second priors, calibrated on IRMOF-1 on one Apple M-series core. Refit by fit_cost_model."""
+    direct_a: float = 0.5
+    direct_b: float = 2.3e-5   # per (cycle x framework atom in the simulated supercell)
+    grid_g: float = 7.0e-8     # per (grid point x supercell atom x grid type)
+    grid_mc_a: float = 0.5
+    grid_mc_c: float = 0.0093  # per cycle
+    n_fits: int = 0
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS evaluations (
@@ -65,14 +81,15 @@ CREATE TABLE IF NOT EXISTS evaluations (
     run_id       TEXT NOT NULL,
     structure    TEXT NOT NULL,
     tier         INTEGER NOT NULL,
+    mode         TEXT,                   -- describe | direct | grid
     status       TEXT NOT NULL,          -- running | ok | timeout | error
     est_cpu_s    REAL,
     timeout_s    REAL,
-    cpu_s        REAL,                   -- measured user+sys of the job process; debits budget
+    cpu_s        REAL,                   -- measured user+sys of the job processes; debits budget
     wall_s       REAL,
     uptake_molkg REAL,                   -- absolute loading, mol/kg
     uptake_err   REAL,                   -- RASPA block-average error on the above
-    result_json  TEXT,                   -- full result / descriptors / error text
+    result_json  TEXT,                   -- descriptors / per-phase costs / error text
     worker_id    TEXT,
     started_at   REAL NOT NULL,
     finished_at  REAL
@@ -83,6 +100,7 @@ CREATE TABLE IF NOT EXISTS timeouts (
     run_id       TEXT NOT NULL,
     structure    TEXT NOT NULL,
     tier         INTEGER NOT NULL,
+    phase        TEXT NOT NULL,          -- makegrid | mc_direct | mc_grid
     timeout_s    REAL NOT NULL,
     n_atoms_sim  INTEGER,
     killed_at    REAL NOT NULL
@@ -98,16 +116,28 @@ class BudgetExhausted(Exception):
 class Descriptors:
     structure: str
     parse_ok: bool
+    alias: str = ""             # RASPA-safe framework name
+    prepared_path: str = ""     # P1 CIF with bare element labels
     n_atoms: int = 0
-    n_atoms_sim: int = 0  # atoms in the supercell actually simulated
+    n_atoms_sim: int = 0        # atoms in the supercell actually simulated
     unit_cells: tuple[int, int, int] = (1, 1, 1)
-    density: float = 0.0  # g/cm3
-    volume: float = 0.0  # A3, unit cell
+    density: float = 0.0        # g/cm3
+    volume: float = 0.0         # A3, unit cell
     perp_widths: tuple[float, float, float] = (0.0, 0.0, 0.0)
     void_fraction_geo: float = 0.0  # crude: 1 - sum(vdW sphere volumes)/V, overlaps ignored
     elements: list[str] = field(default_factory=list)
     metals: list[str] = field(default_factory=list)
+    core: dict = field(default_factory=dict)  # CoRE MOF 2019 Zeo++ descriptors, when listed
     error: str | None = None
+
+
+@dataclass
+class Plan:
+    mode: str               # direct | grid
+    build_grid: bool
+    est_cpu_s: float
+    est_direct_s: float
+    est_grid_s: float
 
 
 @dataclass
@@ -115,7 +145,8 @@ class Evaluation:
     eval_id: str
     structure: str
     tier: int
-    status: str  # ok | timeout | error
+    mode: str
+    status: str             # ok | timeout | error
     uptake_molkg: float | None
     uptake_err: float | None
     cpu_s: float
@@ -126,10 +157,19 @@ class Evaluation:
 
     @property
     def nominal_rel_err(self) -> float:
-        return TIERS[self.tier].nominal_rel_err if self.tier in TIERS else float("nan")
+        return TIERS[self.tier].nominal_rel_err
 
 
-# ---------------------------------------------------------------------------------------- env
+METALS = {
+    "Li", "Be", "Na", "Mg", "Al", "K", "Ca", "Sc", "Ti", "V", "Cr", "Mn", "Fe", "Co", "Ni", "Cu",
+    "Zn", "Ga", "Rb", "Sr", "Y", "Zr", "Nb", "Mo", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd", "In", "Sn",
+    "Cs", "Ba", "La", "Ce", "Pr", "Nd", "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb",
+    "Lu", "Hf", "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg", "Tl", "Pb", "Bi", "Th", "U", "Np",
+    "Pu", "Am",
+}
+
+
+# ---------------------------------------------------------------------------------- RASPA env
 
 def raspa_package_dir() -> Path:
     import RASPA2
@@ -141,22 +181,106 @@ def bundled_cif_dir() -> Path:
     return raspa_package_dir() / "share/raspa/structures/cif"
 
 
-def raspa_dir() -> str:
-    """A short path to the RASPA2 share tree.
+class RaspaEnv:
+    """A RASPA_DIR tree under ~/.cache/sieve.
 
-    libraspa builds file paths into fixed char[256] buffers; a long venv path (this machine's
-    is ~230 chars) overflows them and macOS FORTIFY aborts with SIGTRAP. A symlink under
-    ~/.cache keeps it short.
+    libraspa builds paths in fixed char[256] buffers, so the tree must live at a short path (a
+    ~230-char venv path overflowed them and macOS FORTIFY killed the process with SIGTRAP).
+    Shared read-only data is symlinked from the package; grids are a real, shared cache.
+    Grids are built in a private tree and renamed into the cache, so a kill mid-build never
+    leaves a half-written grid where another job could read it.
     """
-    link = Path.home() / ".cache/sieve/raspa"
-    target = raspa_package_dir()
-    if not (link.is_symlink() and link.resolve() == target):
-        link.parent.mkdir(parents=True, exist_ok=True)
-        tmp = link.with_name(f"raspa.{os.getpid()}")
-        tmp.unlink(missing_ok=True)
-        tmp.symlink_to(target)
-        os.replace(tmp, link)
-    return str(link)
+
+    def __init__(self, root: Path = CACHE_ROOT):
+        self.root = root / "raspa"
+        self.jobs = root / "jobs"
+        self.share = self.root / "share" / "raspa"
+        self.grids = self.share / "grids" / forcefield.NAME
+        self._ensure()
+
+    def _ensure(self) -> None:
+        pkg = raspa_package_dir() / "share" / "raspa"
+        self.share.mkdir(parents=True, exist_ok=True)
+        self.grids.mkdir(parents=True, exist_ok=True)
+        self.jobs.mkdir(parents=True, exist_ok=True)
+        for d in ("molecules", "structures", "framework"):
+            _symlink(pkg / d, self.share / d)
+        ff = self.share / "forcefield"
+        ff.mkdir(exist_ok=True)
+        for d in (pkg / "forcefield").iterdir():
+            _symlink(d, ff / d.name)
+        mine = ff / forcefield.NAME
+        if not (mine / "pseudo_atoms.def").exists():
+            tmp = Path(tempfile.mkdtemp(dir=ff, prefix=".ff-"))
+            forcefield.write(tmp)
+            try:
+                os.rename(tmp, mine)
+            except OSError:  # another process won the race
+                shutil.rmtree(tmp, ignore_errors=True)
+
+    def grid_dir(self, alias: str) -> Path:
+        return self.grids / alias / f"{GRID_SPACING_A:f}"  # RASPA formats spacing with %lf
+
+    def has_grid(self, alias: str) -> bool:
+        d = self.grid_dir(alias)
+        return all((d / f"{alias}_{t}_shifted.grid").exists() for t in forcefield.GRID_TYPES)
+
+    def touch_grid(self, alias: str) -> None:
+        try:
+            os.utime(self.grid_dir(alias))
+        except FileNotFoundError:
+            pass
+
+    def private_root(self) -> Path:
+        root = Path(tempfile.mkdtemp(dir=self.jobs, prefix="g-"))
+        share = root / "share" / "raspa"
+        (share / "grids").mkdir(parents=True)
+        for d in ("molecules", "structures", "framework", "forcefield"):
+            os.symlink(self.share / d, share / d)
+        return root
+
+    def publish(self, private: Path, alias: str) -> bool:
+        built = private / "share/raspa/grids" / forcefield.NAME / alias / f"{GRID_SPACING_A:f}"
+        if not built.is_dir():
+            return False
+        dest = self.grid_dir(alias)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.rename(built, dest)
+        except OSError:  # already published by a concurrent job
+            pass
+        return self.has_grid(alias)
+
+    def evict(self, cap_bytes: int = GRID_CACHE_CAP_BYTES) -> list[str]:
+        entries = []
+        for d in self.grids.glob("*/*"):
+            size = sum(f.stat().st_size for f in d.iterdir() if f.is_file())
+            entries.append((d.stat().st_mtime, size, d))
+        total = sum(s for _, s, _ in entries)
+        evicted, now = [], time.time()
+        for mtime, size, d in sorted(entries):
+            if total <= cap_bytes:
+                break
+            if now - mtime < GRID_PIN_S:
+                continue
+            shutil.rmtree(d, ignore_errors=True)
+            total -= size
+            evicted.append(d.parent.name)
+        return evicted
+
+    def clean_stale_jobs(self, older_than_s: float = 3600.0) -> None:
+        for d in self.jobs.iterdir():
+            if time.time() - d.stat().st_mtime > older_than_s:
+                shutil.rmtree(d, ignore_errors=True)
+
+
+def _symlink(target: Path, link: Path) -> None:
+    if link.is_symlink() and os.readlink(link) == str(target):
+        return
+    tmp = link.with_name(f".{link.name}.{os.getpid()}")
+    tmp.unlink(missing_ok=True)
+    tmp.symlink_to(target)
+    os.replace(tmp, link)
 
 
 def connect(db_path: str | os.PathLike) -> sqlite3.Connection:
@@ -170,6 +294,32 @@ def connect(db_path: str | os.PathLike) -> sqlite3.Connection:
 
 # ------------------------------------------------------------------------------------- tier 0
 
+@lru_cache(maxsize=1)
+def core_descriptors() -> dict[str, dict]:
+    if not CORE_CSV.exists():
+        return {}
+    keep = {"LCD": float, "PLD": float, "LFPD": float, "AV_VF": float, "ASA_m2_g": float,
+            "Has_OMS": str, "Open_Metal_Sites": str, "All_Metals": str, "DISORDER": str}
+    out = {}
+    with open(CORE_CSV, newline="", encoding="utf-8", errors="replace") as f:
+        for row in csv.DictReader(f):
+            d = {}
+            for k, conv in keep.items():
+                v = (row.get(k) or "").strip()
+                try:
+                    d[k] = conv(v) if v else None
+                except ValueError:
+                    d[k] = None
+            out[row["filename"]] = d
+    return out
+
+
+def raspa_alias(name: str) -> str:
+    if re.fullmatch(r"[A-Za-z0-9_.-]{1,40}", name):
+        return name
+    return "h" + hashlib.sha1(name.encode()).hexdigest()[:12]
+
+
 def _perp_widths(lattice) -> tuple[float, float, float]:
     import numpy as np
 
@@ -178,9 +328,31 @@ def _perp_widths(lattice) -> tuple[float, float, float]:
     return tuple(v / float(np.linalg.norm(np.cross(x, y))) for x, y in ((b, c), (c, a), (a, b)))
 
 
-def describe(cif_path: str | os.PathLike) -> Descriptors:
-    """Tier 0. Pure function of the CIF; never raises on a bad file."""
+def _write_p1_cif(s, alias: str, path: Path) -> None:
+    lat = s.lattice
+    lines = [
+        f"data_{alias}",
+        f"_cell_length_a    {lat.a:.6f}", f"_cell_length_b    {lat.b:.6f}",
+        f"_cell_length_c    {lat.c:.6f}", f"_cell_angle_alpha {lat.alpha:.6f}",
+        f"_cell_angle_beta  {lat.beta:.6f}", f"_cell_angle_gamma {lat.gamma:.6f}",
+        "_symmetry_space_group_name_H-M 'P 1'", "_symmetry_Int_Tables_number 1",
+        "loop_", "_symmetry_equiv_pos_as_xyz", "'x,y,z'",
+        "loop_", "_atom_site_label", "_atom_site_type_symbol",
+        "_atom_site_fract_x", "_atom_site_fract_y", "_atom_site_fract_z",
+    ]
+    for site in s:
+        el = site.specie.symbol
+        x, y, z = (float(v) % 1.0 for v in site.frac_coords)
+        lines.append(f"{el} {el} {x:.6f} {y:.6f} {z:.6f}")
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text("\n".join(lines) + "\n")
+    os.replace(tmp, path)
+
+
+def describe(cif_path: str | os.PathLike, prepared_dir: str | os.PathLike) -> Descriptors:
+    """Tier 0. Pure function of the CIF (plus the CoRE descriptor table); never raises."""
     name = Path(cif_path).stem
+    alias = raspa_alias(name)
     try:
         import warnings
 
@@ -189,28 +361,32 @@ def describe(cif_path: str | os.PathLike) -> Descriptors:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             s = Structure.from_file(str(cif_path))
+        if not s.is_ordered:
+            raise ValueError("partial occupancies (disordered sites)")
+        elements = sorted({site.specie.symbol for site in s})
+        missing = [e for e in elements if e not in forcefield.uff_lj()]
+        if missing:
+            raise ValueError(f"no UFF parameters for {missing}")
         widths = _perp_widths(s.lattice)
         cells = tuple(max(1, math.ceil(2 * CUTOFF_A / w)) for w in widths)
-        sphere_v = 0.0
-        for site in s:
-            r = site.specie.van_der_waals_radius or 1.7
-            sphere_v += 4.0 / 3.0 * math.pi * float(r) ** 3
-        elements = sorted({el.symbol for el in s.composition.elements})
+        sphere_v = sum(4.0 / 3.0 * math.pi * float(site.specie.van_der_waals_radius or 1.7) ** 3
+                       for site in s)
+        prepared = Path(prepared_dir) / f"{alias}.cif"
+        prepared.parent.mkdir(parents=True, exist_ok=True)
+        _write_p1_cif(s, alias, prepared)
         return Descriptors(
-            structure=name,
-            parse_ok=True,
-            n_atoms=len(s),
-            n_atoms_sim=len(s) * cells[0] * cells[1] * cells[2],
-            unit_cells=cells,
-            density=float(s.density),
-            volume=float(s.volume),
+            structure=name, parse_ok=True, alias=alias, prepared_path=str(prepared),
+            n_atoms=len(s), n_atoms_sim=len(s) * cells[0] * cells[1] * cells[2],
+            unit_cells=cells, density=float(s.density), volume=float(s.volume),
             perp_widths=tuple(round(w, 3) for w in widths),
             void_fraction_geo=max(0.0, 1.0 - sphere_v / s.volume),
-            elements=elements,
-            metals=[e for e in elements if e in METALS],
+            elements=elements, metals=[e for e in elements if e in METALS],
+            core=core_descriptors().get(name, {}),
         )
-    except Exception as e:  # unparseable structure is a normal tier-0 outcome
-        return Descriptors(structure=name, parse_ok=False, error=f"{type(e).__name__}: {e}")
+    except Exception as e:  # an unusable structure is a normal tier-0 outcome
+        return Descriptors(structure=name, parse_ok=False, alias=alias,
+                           core=core_descriptors().get(name, {}),
+                           error=f"{type(e).__name__}: {e}")
 
 
 # ----------------------------------------------------------------------------------- the oracle
@@ -220,13 +396,16 @@ class Oracle:
 
     def __init__(self, db_path: str | os.PathLike, run_id: str,
                  budget_cpu_s: float = DEFAULT_BUDGET_CPU_S,
-                 labels_path: str | os.PathLike | None = "data/labels.csv"):
+                 labels_path: str | os.PathLike | None = PROJECT_ROOT / "data" / "labels.csv",
+                 prepared_dir: str | os.PathLike = PROJECT_ROOT / "data" / "prepared",
+                 env: RaspaEnv | None = None):
         self.db_path = str(db_path)
         self.run_id = run_id
         self.budget_cpu_s = float(budget_cpu_s)
+        self.prepared_dir = Path(prepared_dir)
         self._labels_path = labels_path
         self.con = connect(self.db_path)
-        self._raspa_dir = raspa_dir()
+        self.env = env or RaspaEnv()
 
     # -- ledger ---------------------------------------------------------------------------
 
@@ -240,18 +419,19 @@ class Oracle:
     def remaining(self) -> float:
         return self.budget_cpu_s - self.spent()
 
-    def _reserve(self, structure: str, tier: int, est: float, timeout_s: float | None,
-                 worker_id: str | None, enforce: bool) -> str:
+    def _reserve(self, structure: str, tier: int, mode: str, est: float, timeout_s: float | None,
+                 worker_id: str | None) -> str:
         eval_id = uuid.uuid4().hex
         self.con.execute("BEGIN IMMEDIATE")
         try:
-            if enforce and self.remaining() < est:
+            if self.remaining() < est:
                 raise BudgetExhausted(
                     f"{structure} tier {tier}: needs ~{est:.1f}s, {self.remaining():.1f}s left")
             self.con.execute(
-                "INSERT INTO evaluations (eval_id, run_id, structure, tier, status, est_cpu_s, "
-                "timeout_s, worker_id, started_at) VALUES (?,?,?,?, 'running', ?,?,?,?)",
-                (eval_id, self.run_id, structure, tier, est, timeout_s, worker_id, time.time()))
+                "INSERT INTO evaluations (eval_id, run_id, structure, tier, mode, status, est_cpu_s, "
+                "timeout_s, worker_id, started_at) VALUES (?,?,?,?,?, 'running', ?,?,?,?)",
+                (eval_id, self.run_id, structure, tier, mode, est, timeout_s, worker_id,
+                 time.time()))
             self.con.execute("COMMIT")
         except BaseException:
             self.con.execute("ROLLBACK")
@@ -267,101 +447,160 @@ class Oracle:
 
     # -- cost model -------------------------------------------------------------------------
 
-    def fit_cost_model(self) -> tuple[float, float]:
-        """Refit b from this DB's completed GCMC calls (median of per-call estimates)."""
-        rows = self.con.execute(
-            "SELECT tier, cpu_s, json_extract(result_json, '$.n_atoms_sim') AS n "
-            "FROM evaluations WHERE status='ok' AND tier>0 AND n IS NOT NULL").fetchall()
-        bs = sorted((r["cpu_s"] - COST_PRIOR_A) / ((TIERS[r["tier"]].cycles
-                     + TIERS[r["tier"]].init_cycles) * r["n"]) for r in rows if r["n"])
-        return (COST_PRIOR_A, bs[len(bs) // 2]) if len(bs) >= 3 else (COST_PRIOR_A, COST_PRIOR_B)
+    def fit_cost_model(self) -> CostModel:
+        """Refit the per-phase cost coefficients from every finished phase in this DB."""
+        prior = CostModel()
+        d, g, m = [], [], []
+        for (rj,) in self.con.execute(
+                "SELECT result_json FROM evaluations WHERE tier>0 AND status='ok'"):
+            for p in json.loads(rj or "{}").get("phases", []):
+                if p.get("status") != "ok":
+                    continue
+                if p["kind"] == "mc_direct":
+                    d.append((p["cpu_s"] - prior.direct_a) / (p["cycles"] * p["n_atoms_sim"]))
+                elif p["kind"] == "makegrid":
+                    g.append(p["cpu_s"] / (p["grid_points"] * p["n_atoms_sim"] * p["grid_types"]))
+                elif p["kind"] == "mc_grid":
+                    m.append((p["cpu_s"] - prior.grid_mc_a) / p["cycles"])
+        med = lambda xs, default: sorted(xs)[len(xs) // 2] if len(xs) >= 3 else default  # noqa: E731
+        return CostModel(direct_b=med(d, prior.direct_b), grid_g=med(g, prior.grid_g),
+                         grid_mc_c=med(m, prior.grid_mc_c), n_fits=len(d) + len(g) + len(m))
 
-    def estimate_cost(self, desc: Descriptors, tier: int, model: tuple[float, float] | None = None
-                      ) -> float:
-        if tier == 0:
-            return 0.25
-        a, b = model or (COST_PRIOR_A, COST_PRIOR_B)
+    @staticmethod
+    def grid_points(desc: Descriptors) -> float:
+        return desc.volume / GRID_SPACING_A ** 3
+
+    def plan(self, desc: Descriptors, tier: int, mode: str = "auto",
+             model: CostModel | None = None) -> Plan:
+        m = model or CostModel()
         t = TIERS[tier]
-        return a + b * (t.cycles + t.init_cycles) * max(desc.n_atoms_sim, 1)
+        cycles = t.cycles + t.init_cycles
+        direct = m.direct_a + m.direct_b * cycles * desc.n_atoms_sim
+        cached = self.env.has_grid(desc.alias)
+        build = 0.0 if cached else (m.grid_g * self.grid_points(desc) * desc.n_atoms_sim
+                                    * len(forcefield.GRID_TYPES))
+        grid = build + m.grid_mc_a + m.grid_mc_c * cycles
+        if mode == "auto":
+            mode = "grid" if grid < direct else "direct"
+        est = grid if mode == "grid" else direct
+        return Plan(mode, mode == "grid" and not cached, est, direct, grid)
 
     # -- tier 0 -----------------------------------------------------------------------------
 
     def tier0(self, cif_path: str | os.PathLike, worker_id: str | None = None) -> Descriptors:
         name = Path(cif_path).stem
-        eval_id = self._reserve(name, 0, 0.25, None, worker_id, enforce=True)
+        eval_id = self._reserve(name, 0, "describe", 0.05, None, worker_id)
         c0, t0 = time.process_time(), time.time()
-        d = describe(cif_path)
+        d = describe(cif_path, self.prepared_dir)
         cpu, wall = time.process_time() - c0, time.time() - t0
         self._finish(eval_id, "ok" if d.parse_ok else "error", cpu, wall, result=asdict(d))
         return d
 
     # -- tier 1 / 2 -------------------------------------------------------------------------
 
-    def simulate(self, cif_path: str | os.PathLike, tier: int, desc: Descriptors | None = None,
+    def _run_child(self, job: dict, deadline: float) -> dict:
+        """Run one RASPA call in a child process; SIGKILL it at the deadline."""
+        work = Path(tempfile.mkdtemp(dir=self.env.jobs, prefix="j-"))
+        job = {**job, "workdir": str(work)}
+        job_path, out_path, err_path = work / "job.json", work / "out.json", work / "stderr.txt"
+        job_path.write_text(json.dumps(job))
+        t0 = time.time()
+        with open(err_path, "w") as err_f:
+            proc = subprocess.Popen([sys.executable, "-m", "sieve._raspa_job", str(job_path),
+                                     str(out_path)], stdout=subprocess.DEVNULL, stderr=err_f,
+                                    cwd=work, start_new_session=True)
+            killed = False
+            while True:
+                pid, wstatus, ru = os.wait4(proc.pid, os.WNOHANG)
+                if pid:
+                    break
+                if time.time() > deadline:
+                    os.killpg(proc.pid, 9)
+                    _, wstatus, ru = os.wait4(proc.pid, 0)
+                    killed = True
+                    break
+                time.sleep(0.05)
+        phase = {"kind": job["kind"], "cpu_s": ru.ru_utime + ru.ru_stime,
+                 "wall_s": time.time() - t0, "exit_code": os.waitstatus_to_exitcode(wstatus)}
+        if killed:
+            phase["status"] = "timeout"
+        elif phase["exit_code"] == 0 and out_path.exists():
+            phase["status"] = "ok"
+            phase["result"] = json.loads(out_path.read_text())
+        else:
+            phase["status"] = "error"
+            phase["stderr"] = err_path.read_text(errors="replace")[-1500:]
+        shutil.rmtree(work, ignore_errors=True)
+        return phase
+
+    def simulate(self, desc: Descriptors, tier: int, mode: str = "auto",
                  timeout_s: float | None = None, worker_id: str | None = None,
-                 cost_model: tuple[float, float] | None = None) -> Evaluation:
-        """Run one GCMC job in a child process. Blocks. A timeout returns status='timeout'."""
-        t = TIERS[tier]
-        cif_path = str(Path(cif_path).resolve())
-        desc = desc or describe(cif_path)
+                 cost_model: CostModel | None = None) -> Evaluation:
+        """Run one GCMC evaluation (grid build if needed + MC). Blocks.
+
+        Returns status 'ok', 'timeout' or 'error'; never raises for a failed simulation.
+        Raises BudgetExhausted if the estimate does not fit in the remaining budget.
+        """
         if not desc.parse_ok:
-            raise ValueError(f"{desc.structure}: unparseable CIF, run tier 0 first ({desc.error})")
-        est = self.estimate_cost(desc, tier, cost_model)
+            raise ValueError(f"{desc.structure}: unusable structure ({desc.error})")
+        t = TIERS[tier]
+        plan = self.plan(desc, tier, mode, cost_model)
         if timeout_s is None:
-            timeout_s = min(t.max_timeout_s, max(30.0, 4.0 * est))
-        eval_id = self._reserve(desc.structure, tier, est, timeout_s, worker_id, enforce=True)
-
-        job = {
-            "cif_path": cif_path, "molecule": "CO2", "temperature": 298.0, "pressure": 100000.0,
-            # Brief specifies a fixed 0.75. It only affects the excess number, not the absolute
-            # loading we rank on. Replace with a per-structure helium run if excess is needed.
+            timeout_s = min(t.max_timeout_s, max(30.0, 4.0 * plan.est_cpu_s))
+        eval_id = self._reserve(desc.structure, tier, plan.mode, plan.est_cpu_s, timeout_s,
+                                worker_id)
+        t0 = time.time()
+        deadline = t0 + timeout_s
+        base = {
+            "alias": desc.alias, "cif_path": desc.prepared_path, "elements": desc.elements,
+            "unit_cells": list(desc.unit_cells), "forcefield": forcefield.NAME,
+            "grid_types": list(forcefield.GRID_TYPES), "spacing": GRID_SPACING_A,
+            "molecule": "CO2", "temperature": 298.0, "pressure": 100000.0,
+            # Only affects the excess number; ranking uses absolute loading.
             "helium_void_fraction": 0.75,
-            "unit_cells": list(desc.unit_cells), "cycles": t.cycles, "init_cycles": t.init_cycles,
-            "forcefield": "CrystalGenerator", "raspa_dir": self._raspa_dir,
         }
-        with tempfile.TemporaryDirectory(prefix="sieve-") as tmp:
-            job_path, out_path, err_path = (os.path.join(tmp, n) for n in
-                                            ("job.json", "out.json", "stderr.txt"))
-            json.dump(job, open(job_path, "w"))
-            t0 = time.time()
-            with open(err_path, "w") as err_f:
-                proc = subprocess.Popen(
-                    [sys.executable, "-m", "sieve._raspa_job", job_path, out_path],
-                    stdout=subprocess.DEVNULL, stderr=err_f, cwd=tmp, start_new_session=True)
-                status, ru = None, None
-                while True:
-                    pid, wstatus, ru = os.wait4(proc.pid, os.WNOHANG)
-                    if pid:
-                        break
-                    if time.time() - t0 > timeout_s:
-                        os.killpg(proc.pid, 9)
-                        _, wstatus, ru = os.wait4(proc.pid, 0)
-                        status = "timeout"
-                        break
-                    time.sleep(0.05)
-                proc.returncode = os.waitstatus_to_exitcode(wstatus)
-            wall = time.time() - t0
-            cpu = ru.ru_utime + ru.ru_stime
+        cost = {"n_atoms_sim": desc.n_atoms_sim, "cycles": t.cycles + t.init_cycles,
+                "grid_points": self.grid_points(desc), "grid_types": len(forcefield.GRID_TYPES)}
+        phases = []
+        if plan.mode == "grid":
+            self.env.touch_grid(desc.alias)
+            if plan.build_grid:
+                private = self.env.private_root()
+                try:
+                    p = self._run_child({**base, "kind": "makegrid", "raspa_root": str(private)},
+                                        deadline)
+                    if p["status"] == "ok" and not (p["result"].get("grid_ok")
+                                                    and self.env.publish(private, desc.alias)):
+                        p["status"], p["stderr"] = "error", "grid build did not complete"
+                finally:
+                    shutil.rmtree(private, ignore_errors=True)
+                phases.append({**p, **cost})
+                self.env.evict()
+        if not phases or phases[-1]["status"] == "ok":
+            kind = "mc_grid" if plan.mode == "grid" else "mc_direct"
+            p = self._run_child({**base, "kind": kind, "raspa_root": str(self.env.root),
+                                 "cycles": t.cycles, "init_cycles": t.init_cycles}, deadline)
+            phases.append({**p, **cost})
 
-            meta = {"n_atoms_sim": desc.n_atoms_sim, "unit_cells": list(desc.unit_cells),
-                    "exit_code": proc.returncode}
-            if status == "timeout":
-                self._finish(eval_id, "timeout", cpu, wall, result=meta)
-                self.con.execute(
-                    "INSERT INTO timeouts VALUES (?,?,?,?,?,?,?)",
-                    (eval_id, self.run_id, desc.structure, tier, timeout_s, desc.n_atoms_sim,
-                     time.time()))
-                return Evaluation(eval_id, desc.structure, tier, "timeout", None, None, cpu, wall,
-                                  timeout_s, est, meta)
-            if proc.returncode != 0 or not os.path.exists(out_path):
-                meta["stderr"] = open(err_path).read()[-2000:]
-                self._finish(eval_id, "error", cpu, wall, result=meta)
-                return Evaluation(eval_id, desc.structure, tier, "error", None, None, cpu, wall,
-                                  timeout_s, est, meta)
-            res = {**json.load(open(out_path)), **meta}
-        self._finish(eval_id, "ok", cpu, wall, res["uptake_molkg"], res["uptake_err"], res)
-        return Evaluation(eval_id, desc.structure, tier, "ok", res["uptake_molkg"],
-                          res["uptake_err"], cpu, wall, timeout_s, est, res)
+        cpu = sum(p["cpu_s"] for p in phases)
+        wall = time.time() - t0
+        last = phases[-1]
+        meta = {"plan": asdict(plan), "phases": phases, "unit_cells": list(desc.unit_cells),
+                "n_atoms_sim": desc.n_atoms_sim}
+        status = last["status"]
+        if status == "timeout":
+            self.con.execute("INSERT INTO timeouts VALUES (?,?,?,?,?,?,?,?)",
+                             (eval_id, self.run_id, desc.structure, tier, last["kind"], timeout_s,
+                              desc.n_atoms_sim, time.time()))
+        if status != "ok":
+            self._finish(eval_id, status, cpu, wall, result=meta)
+            return Evaluation(eval_id, desc.structure, tier, plan.mode, status, None, None, cpu,
+                              wall, timeout_s, plan.est_cpu_s, meta)
+        r = last["result"]
+        meta.update({k: r[k] for k in ("excess_molkg", "excess_err", "molecules_per_cell")})
+        self._finish(eval_id, "ok", cpu, wall, r["uptake_molkg"], r["uptake_err"], meta)
+        return Evaluation(eval_id, desc.structure, tier, plan.mode, "ok", r["uptake_molkg"],
+                          r["uptake_err"], cpu, wall, timeout_s, plan.est_cpu_s, meta)
 
     # -- held-out labels: post-hoc scoring only -------------------------------------------------
 
@@ -398,16 +637,16 @@ class Oracle:
 # ------------------------------------------------------------------------------------- smoke
 
 def _smoke() -> None:
-    import tempfile as tf
-
-    cif = bundled_cif_dir() / "IRMOF-1.cif"
-    with tf.TemporaryDirectory() as d:
-        o = Oracle(Path(d) / "smoke.db", "smoke", labels_path=None)
-        desc = o.tier0(cif)
-        ev = o.simulate(cif, 1, desc)
-        print(f"{ev.structure} tier-1 CO2 @ 298 K, 1 bar: {ev.uptake_molkg:.3f} +/- "
-              f"{ev.uptake_err:.3f} mol/kg (abs, NOT converged)  cpu={ev.cpu_s:.1f}s  "
-              f"est={ev.est_cpu_s:.1f}s  cells={desc.unit_cells}  ledger={o.spent():.1f}s")
+    with tempfile.TemporaryDirectory() as d:
+        o = Oracle(Path(d) / "smoke.db", "smoke", labels_path=None, prepared_dir=Path(d))
+        desc = o.tier0(bundled_cif_dir() / "IRMOF-1.cif")
+        for mode in ("direct", "grid"):
+            ev = o.simulate(desc, 1, mode=mode)
+            kinds = "+".join(f"{p['kind']}:{p['cpu_s']:.1f}s" for p in ev.result["phases"])
+            print(f"{ev.structure} tier-1 [{mode}] CO2 @ 298 K, 1 bar: {ev.uptake_molkg:.3f} +/- "
+                  f"{ev.uptake_err:.3f} mol/kg (abs, NOT converged)  cpu={ev.cpu_s:.1f}s "
+                  f"({kinds})  est={ev.est_cpu_s:.1f}s")
+        print(f"ledger={o.spent():.1f}s  cells={desc.unit_cells}")
 
 
 if __name__ == "__main__":

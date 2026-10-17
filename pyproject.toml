@@ -15,6 +15,10 @@ sieve = "sieve.__main__:main"
 requires = ["uv_build>=0.12.5,<0.13.0"]
 build-backend = "uv_build"
 
+[tool.uv.sources]
+# Patched RASPA2 2.0.4; run scripts/fetch_raspa.sh once before `uv sync`.
+raspa2 = { path = "vendor/raspa2-2.0.4" }
+
 [tool.uv]
 # RASPA2 2.0.4 does not build or stream on macOS as shipped:
 #  - clang >= 16 makes implicit function declarations an error (output.c: sysctlbyname)

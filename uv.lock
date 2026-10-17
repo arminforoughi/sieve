@@ -948,8 +948,7 @@ wheels = [
 [[package]]
 name = "raspa2"
 version = "2.0.4"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/df/7c/6b435fed5080134b1bdeecf82ce490a4d324f3fb87a432b226623f7cd69f/RASPA2-2.0.4.tar.gz", hash = "sha256:b051782dddc395b008c31f47347da344b202ac3aa909610e3ce67e94c51f2bf1", size = 3260275, upload-time = "2021-04-29T14:14:02.941Z" }
+source = { directory = "vendor/raspa2-2.0.4" }
 
 [[package]]
 name = "requests"
@@ -1053,7 +1052,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "pymatgen", specifier = ">=2026.9.24" },
-    { name = "raspa2", specifier = ">=2.0.4" },
+    { name = "raspa2", directory = "vendor/raspa2-2.0.4" },
 ]
 
 [package.metadata.requires-dev]

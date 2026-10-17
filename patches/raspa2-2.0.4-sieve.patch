@@ -1,0 +1,26 @@
+--- a/src/grids.c
++++ b/src/grids.c
+@@ -584,6 +584,13 @@
+     WriteVDWGrid(GridTypeList[l]);
+   }
+ 
++  // SIEVE patch: with ChargeMethod None there is no Coulomb grid to make (WriteCoulombGrid crashes on it)
++  if(save==NONE)
++  {
++    ChargeMethod=save;
++    return;
++  }
++
+   // compute the number of grid points
+   NumberOfCoulombGridPoints.x=(int)(SizeGrid.x/SpacingCoulombGrid);
+   NumberOfCoulombGridPoints.y=(int)(SizeGrid.y/SpacingCoulombGrid);
+--- a/src/potentials.c
++++ b/src/potentials.c
+@@ -10978,6 +10978,7 @@
+       fcVal3=0.0;
+       if(rr<OverlapDistanceSquared) U=2.0*EnergyOverlapCriteria;
+       break;
++    case LENNARD_JONES_CONTINUOUS_FRACTIONAL:  // SIEVE patch: identical to LJ at lambda=1; grids never see fractional molecules
+     case LENNARD_JONES:
+       // 4*p_0*((p_1/r)^12-(p_1/r)^6)
+       // ======================================================================================
