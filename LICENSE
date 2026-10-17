@@ -20,6 +20,3 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-Third-party material keeps its own license: data/library/nemotron_science_rqa.jsonl
-is derived from NVIDIA Nemotron-Science-v1 (CC-BY-4.0, see data/library/README.md);
-patches/raspa2-2.0.4-sieve.patch modifies RASPA2 (MIT).
