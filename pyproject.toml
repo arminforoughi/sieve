@@ -1,0 +1,28 @@
+[project]
+name = "sieve"
+version = "0.1.0"
+description = "Fault-tolerant multi-agent, multi-fidelity GCMC screening of MOFs for CO2 capture"
+requires-python = ">=3.13"
+dependencies = [
+    "pymatgen>=2026.9.24",
+    "raspa2>=2.0.4",
+]
+
+[project.scripts]
+sieve = "sieve.__main__:main"
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv]
+# RASPA2 2.0.4 does not build or stream on macOS as shipped:
+#  - clang >= 16 makes implicit function declarations an error (output.c: sysctlbyname)
+#  - streaming (fmemopen/open_memstream) is gated on __unix__, which Apple clang does not define,
+#    although macOS has both functions. Defining it enables RASPA2.run(cif_text, ...) on macOS.
+extra-build-variables = { raspa2 = { CFLAGS = "-D__unix__ -Wno-implicit-function-declaration -w" } }
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
