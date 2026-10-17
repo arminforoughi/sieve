@@ -66,7 +66,8 @@ async function viewer(id, s) {
     v.setStyle({}, { stick: { radius: 0.14, colorscheme: "Jmol" }, sphere: { scale: 0.24, colorscheme: "Jmol" } });
     v.addUnitCell(m, { box: { color: "#9097A3" }, alabel: "", blabel: "", clabel: "" });
     for (const p of P.void) v.addSphere({ center: { x: p[0], y: p[1], z: p[2] }, radius: 0.9, color: "#0B8A98", opacity: 0.12 });
-    v.zoomTo(); v.render(); if (!params.get("snapshot")) v.spin("y", 0.3);
+    v.resize(); v.zoomTo(); v.zoom(1.1); v.render(); if (!params.get("snapshot")) v.spin("y", 0.3);
+    window.addEventListener("resize", () => { v.resize(); v.render(); });
   } catch (_) { document.getElementById(id).innerHTML = '<div class="muted" style="padding:12px">3D view needs WebGL.</div>'; }
 }
 boot();

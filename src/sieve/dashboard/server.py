@@ -541,9 +541,11 @@ def create_app(db: str, replay_run: str | None = None) -> FastAPI:
         return discoveries(db, run)
 
     @app.get("/api/compare")
-    def api_compare():
-        rep = Path(__file__).resolve().parents[3] / "data" / "arena-report.json"
-        return json.loads(rep.read_text()) if rep.exists() else {"arms": {}}
+    def api_compare():  # computed live, so arms appear as their seeds finish
+        from sieve.arena_eval import REPLAY_DB, report
+        if not Path(REPLAY_DB).exists():
+            return {"arms": {}}
+        return report(Path(REPLAY_DB), [0.127, 0.25, 0.5, 1.0])
 
     @app.get("/api/config")
     def config():
