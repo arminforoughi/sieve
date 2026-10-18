@@ -9,6 +9,8 @@
 .wf-steps { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 10px;
   grid-template-columns: repeat(6, minmax(0, 1fr)); counter-reset: step; }
 .wf-verify { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.wf-steps > li { display: flex; min-width: 0; } /* every card in a row is as tall as the tallest */
+.wf-steps > li > .wf-step { flex: 1; }
 
 .wf-step { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 12px 12px 10px;
   border: 1px solid var(--border); border-radius: var(--r); background: var(--panel); min-width: 0;
@@ -19,7 +21,7 @@ a.wf-step:hover { border-color: var(--accent); box-shadow: 0 1px 6px rgba(11, 13
 .wf-step.verify { border-top: 3px solid var(--green); }
 
 /* arrows between steps (wide layouts only) */
-.wf-step:not(:last-child)::after { content: ""; position: absolute; right: -9px; top: 26px; width: 8px; height: 8px;
+.wf-steps > li:not(:last-child) > .wf-step::after { content: ""; position: absolute; right: -9px; top: 26px; width: 8px; height: 8px;
   border-top: 2px solid var(--idle); border-right: 2px solid var(--idle); transform: rotate(45deg); }
 
 .wf-k { display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 600; letter-spacing: .06em;
@@ -48,7 +50,7 @@ a.wf-step:hover { border-color: var(--accent); box-shadow: 0 1px 6px rgba(11, 13
 @media (max-width: 1180px) {
   .wf-steps { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .wf-verify { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .wf-step::after, .wf-loop { display: none; }
+  .wf-steps > li:not(:last-child) > .wf-step::after, .wf-loop { display: none; }
   .wf-flow:first-of-type .wf-steps { margin-top: 10px; }
 }
 @media (max-width: 700px) {

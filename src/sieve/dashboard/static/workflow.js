@@ -19,7 +19,9 @@
   }
 
   function render(d) {
-    const r = d.run, M = d.models || {}, q = (role) => (M[role] ? chip(short(M[role])) : "");
+    const r = d.run, M = d.models || {};
+    // one chip per distinct model: two roles on the same model show it once
+    const q = (...roles) => [...new Set(roles.map((x) => M[x] && short(M[x])).filter(Boolean))].map((m) => chip(m)).join("");
     const run = r ? `?run=${encodeURIComponent(r.run_id)}` : "";
     if (!r) { $("wf-run").innerHTML = "No run yet."; return; }
     const pol = r.policy || {};
@@ -41,7 +43,7 @@
         stat: sc ? stat([`<b>${n(sc.calls)}</b>scout decisions`, sc.sub_scouts ? `<b>${n(sc.sub_scouts)}</b>sub-scouts` : null]) : stat(["not used by this arm"]) }),
       step(3, { k: "allocate", title: "Pick the next jobs", cls: "loop", off: !agentic, href: "/agents" + run,
         what: "Chooses which structures to simulate and how carefully, within the round's budget." + (pol.random_frac ? " v5 keeps a random slice so luck is never lost." : ""),
-        who: q("allocator") + q("orchestrator"),
+        who: q("allocator", "orchestrator"),
         stat: stat([`<b>${n(al.rounds)}</b>rounds`, agentic ? `<b>${n(al.calls)}</b>allocations` : null, al.random_slice ? `<b>${n(al.random_slice)}</b>random picks` : null]) }),
       step(4, { k: "simulate", title: "Run GCMC", cls: "loop", href: "/" + run,
         what: "RASPA on local CPUs: short tier-1 runs to rank, long tier-2 runs to confirm" + (si.tier3 ? ", tier-3 flue-gas checks." : ".") + " Timeouts are normal.",
@@ -53,7 +55,7 @@
         stat: cr ? stat([`<b>${n(cr.vetoes)}</b>vetoes`, cr.disorder_flags ? `<b>${n(cr.disorder_flags)}</b>disorder artefacts` : null]) : stat(["no critic in this arm"]) }),
       step(6, { k: "recommend", title: "Name a winner", href: rec ? `/science?name=${encodeURIComponent(rec.structure)}` : null,
         what: "Only a tier-2-confirmed structure may be named. The analyst explains why it works.",
-        who: q("orchestrator") + q("analyst"),
+        who: q("orchestrator", "analyst"),
         stat: stat([rec ? `<b>${nm(rec.structure)}</b>${Number(rec.uptake).toFixed(2)} mol/kg, tier ${rec.tier}` : "not yet"]) }),
     ].join("");
 
