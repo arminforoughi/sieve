@@ -24,7 +24,10 @@
   (CHA: 132 atoms instead of 108; DDR: 372 instead of 360). `sieve.oracle._load_structure()`
   merges with a 1e-3 tolerance for files under `data/zeolites/` only. With that, all 250 parse to
   exact SiO2 with no Si-O contact below 1.3 A.
-- They are not CoRE MOFs, so there are no Zeo++ descriptors (PLD, LCD, void fraction).
+- They are not CoRE MOFs, so CoRE has no Zeo++ descriptors for them. `python -m sieve.porosity zeolites`
+  computes PLD, LCD, void fraction, N2-probe surface area and density on CoRE's scale (grid method,
+  CCDC radii; validated against CoRE on 20 MOFs, see `sieve/porosity.py`) into `descriptors.json`, which
+  `core_descriptors()` merges so `--pool mixed` can screen them next to the MOFs.
 
 ## Caveat
 

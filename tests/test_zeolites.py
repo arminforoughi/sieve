@@ -18,5 +18,6 @@ def test_naming():
 def test_describe_merges_special_positions(tmp_path, code, n):
     d = describe(zeolite_cif(f"IZA-{code}"), tmp_path)
     assert d.parse_ok and d.structure == f"IZA-{code}" and d.alias == f"IZA-{code}"
-    assert d.n_atoms == n and d.elements == ["O", "Si"] and d.metals == [] and d.core == {}
+    assert d.n_atoms == n and d.elements == ["O", "Si"] and d.metals == []
+    assert d.core == {} or d.core.get("family") == "zeolite"  # sieve.porosity descriptors once built
     assert all(c >= 1 for c in d.unit_cells)

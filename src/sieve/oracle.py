@@ -335,7 +335,8 @@ def connect(db_path: str | os.PathLike) -> sqlite3.Connection:
 @lru_cache(maxsize=1)
 def core_descriptors() -> dict[str, dict]:
     if not CORE_CSV.exists():
-        return {}
+        from sieve.porosity import load_zeolite_table
+        return load_zeolite_table()
     keep = {"LCD": float, "PLD": float, "LFPD": float, "AV_VF": float, "ASA_m2_g": float,
             "Has_OMS": str, "Open_Metal_Sites": str, "All_Metals": str, "DISORDER": str}
     out = {}
@@ -349,7 +350,8 @@ def core_descriptors() -> dict[str, dict]:
                 except ValueError:
                     d[k] = None
             out[row["filename"]] = d
-    return out
+    from sieve.porosity import load_zeolite_table  # IZA-<CODE>: computed on CoRE's scale
+    return {**out, **load_zeolite_table()}
 
 
 def raspa_alias(name: str) -> str:
