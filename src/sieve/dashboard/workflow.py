@@ -131,6 +131,33 @@ def recursion(db: str, run_id: str | None) -> dict:
             "review": _delegations(root / "science" / "reviews.db")}
 
 
+# The run's whole state lives in one SQLite file; the page shows it table by table.
+TABLES = [
+    ("runs", "one row per run: arm, budget, config (models, policy, objective), status", ["run_id", "arm", "budget_cpu_s", "config_json", "status"]),
+    ("rounds", "each round's plan and outcome", ["run_id", "round_no", "plan_json", "summary_json"]),
+    ("tasks", "the job queue: what the allocator asked for, and why", ["task_id", "structure", "tier", "reason", "status"]),
+    ("evaluations", "every simulation: CPU spent, result, heartbeats. The budget ledger is SUM(cpu_s)", ["eval_id", "structure", "tier", "cpu_s", "uptake_molkg", "heartbeat_at"]),
+    ("timeouts", "jobs that hit their CPU limit, kept as evidence for the critic", ["eval_id", "structure", "tier", "n_atoms_sim"]),
+    ("agents", "who exists: role, model, parent, tokens and cost", ["agent_id", "role", "model", "parent_id", "tokens_in"]),
+    ("events", "the narrative: every decision, veto, delegation, model call and failure", ["event_id", "ts", "agent_id", "type", "payload_json"]),
+]
+
+
+def tables(db: str, run_id: str | None) -> list[dict]:
+    con = _ro(db)
+    have = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    out = []
+    for name, what, key in TABLES:
+        if name not in have:
+            continue
+        cols = [r[1] for r in con.execute(f"PRAGMA table_info({name})")]  # names from the fixed list above
+        total = _one(con, f"SELECT COUNT(*) FROM {name}")
+        here = _one(con, f"SELECT COUNT(*) FROM {name} WHERE run_id=?", run_id) if run_id and "run_id" in cols else None
+        out.append({"name": name, "what": what, "key": [c for c in key if c in cols], "n_cols": len(cols),
+                    "total": total, "this_run": here})
+    return out
+
+
 def workflow(db: str, run_id: str | None) -> dict:
     from sieve.dashboard import validation
     con = _ro(db)
@@ -149,6 +176,11 @@ def workflow(db: str, run_id: str | None) -> dict:
         out["verify"]["disorder"] = {"scanned": len(d), "disordered": sum(1 for r in d.values() if r.get("disordered"))}
     except Exception:  # noqa: BLE001
         pass
+    try:
+        out["tables"] = tables(db, run_id)
+        out["db_file"] = Path(db).name
+    except Exception as e:  # noqa: BLE001
+        out["tables"] = {"error": f"{type(e).__name__}: {e}"[:200]}
     try:
         out["recursion"] = recursion(db, run_id)
     except Exception as e:  # noqa: BLE001

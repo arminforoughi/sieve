@@ -111,9 +111,20 @@
       : '<span class="dim">no reviews yet</span>';
   }
 
+  function db(T, file, run) {
+    const host = $("wf-db");
+    if (!T || T.error) { host.innerHTML = `<span class="dim">database summary unavailable</span>`; return; }
+    if (file) $("db-file").textContent = file;
+    host.innerHTML = T.map((t) => `<div class="wf-tbl">
+      <span class="tn">${t.name}</span><p>${t.what}</p>
+      <span class="cols">${t.key.map((c) => `<code>${c}</code>`).join("")}${t.n_cols > t.key.length ? `<code>+${t.n_cols - t.key.length}</code>` : ""}</span>
+      <span class="cnt">${t.this_run != null ? `<b>${n(t.this_run)}</b>rows in ${run || "this run"} · ` : ""}${n(t.total)} total</span></div>`).join("")
+      + `<div class="wf-tbl"><span class="tn">beside it</span><p>Same design, separate files: <code>arena-replay.db</code> (benchmark seeds), <code>science/reviews.db</code> (peer reviews), <code>arena.db</code> (the benchmark's answer key, never shown to an agent).</p></div>`;
+  }
+
   function load() {
     const run = (window.Shell && Shell.run) || "";
-    fetch("/api/workflow" + (run ? `?run=${encodeURIComponent(run)}` : "")).then((r) => r.json()).then((d) => { render(d); recursion(d.recursion); })
+    fetch("/api/workflow" + (run ? `?run=${encodeURIComponent(run)}` : "")).then((r) => r.json()).then((d) => { render(d); recursion(d.recursion); db(d.tables, d.db_file, d.run && d.run.run_id); })
       .catch((e) => { $("wf-run").innerHTML = `<span class="callout bad">Could not load: ${e}</span>`; });
   }
 

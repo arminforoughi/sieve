@@ -105,6 +105,23 @@
     </ul>
   </section>
 
+  <section class="card" aria-label="Database">
+    <h2>5 · The record <span class="sub">everything a run does lands in one SQLite file, <code id="db-file">runs.db</code>; nothing important lives only in memory</span></h2>
+    <div class="wf-db" id="wf-db"><span class="spin"></span> Loading…</div>
+    <div class="wf-db-notes">
+      <div><h3>How the tables connect</h3>
+        <p><code>runs</code> → <code>rounds</code> → <code>tasks</code> → <code>evaluations</code>: a run plans rounds, a round queues tasks, a task becomes one simulation. <code>timeouts</code> hangs off an evaluation; <code>agents</code> and <code>events</code> hang off the run, and events point at the agent that wrote them (and its parent, for sub-agents).</p></div>
+      <div><h3>Why it survives a crash</h3>
+        <p>The budget is never a counter in memory: it is <code>SUM(cpu_s)</code> over <code>evaluations</code>, with heartbeats charging jobs still running. After <code>kill -9</code>, <code>python -m sieve resume</code> marks lost jobs, charges what they used, re-queues their tasks and carries on.</p></div>
+      <div><h3>Ask it yourself</h3>
+        <pre class="wf-sql">SELECT tier, COUNT(*) AS jobs,
+       ROUND(SUM(cpu_s) / 3600, 2) AS cpu_h
+FROM evaluations
+WHERE run_id = 'sieve-main' AND status = 'ok'
+GROUP BY tier;</pre></div>
+    </div>
+  </section>
+
   <section class="card" aria-label="Rules">
     <h2>The rules that keep it honest</h2>
     <ul class="wf-rules">

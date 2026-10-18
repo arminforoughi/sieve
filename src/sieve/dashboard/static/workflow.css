@@ -94,3 +94,21 @@ a.wf-step:hover { border-color: var(--accent); box-shadow: 0 1px 6px rgba(11, 13
 .wf-step.t3 .wf-n { background: var(--violet); color: #fff; }
 @media (max-width: 1180px) { .wf-steps:has(> li:nth-child(7)) { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 700px) { .wf-steps:has(> li:nth-child(7)) { grid-template-columns: minmax(0, 1fr); } }
+
+/* 5 · the record */
+.wf-db { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 8px; }
+.wf-tbl { border: 1px solid var(--border); border-radius: var(--r); padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.wf-tbl .tn { font-family: var(--mono); font-size: 14px; font-weight: 600; color: var(--accent-ink); }
+.wf-tbl p { font-size: 12.5px; line-height: 1.45; color: var(--ink-2); margin: 0; }
+.wf-tbl .cols { display: flex; flex-wrap: wrap; gap: 4px; }
+.wf-tbl .cols code { font-size: 11px; background: var(--bg); border: 1px solid var(--grid); border-radius: 4px; padding: 1px 5px; color: var(--ink-2); }
+.wf-tbl .cnt { margin-top: auto; padding-top: 6px; border-top: 1px dashed var(--grid); font-size: 12px; color: var(--ink-3); }
+.wf-tbl .cnt b { font-family: var(--mono); font-size: 15px; color: var(--ink); margin-right: 3px; }
+.wf-db-notes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--gap); margin-top: 12px; }
+.wf-db-notes > div { border: 1px solid var(--border); border-radius: var(--r); padding: 10px 12px; min-width: 0; }
+.wf-db-notes h3 { margin: 0 0 6px; font-size: 13px; }
+.wf-db-notes p { font-size: 12.5px; line-height: 1.5; color: var(--ink-2); margin: 0; }
+.wf-sql { margin: 0; background: var(--bg); border: 1px solid var(--grid); border-radius: 6px; padding: 8px 10px;
+  font: 12px/1.5 var(--mono); color: var(--ink); overflow-x: auto; white-space: pre; }
+@media (max-width: 1180px) { .wf-db { grid-template-columns: repeat(2, minmax(0, 1fr)); } .wf-db-notes { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 560px) { .wf-db { grid-template-columns: minmax(0, 1fr); } }
