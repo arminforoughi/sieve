@@ -142,7 +142,7 @@ async function loadCards() {
 function card(c, i) {
   const n = c.note || {}, e = c.estimate;
   const tags = [c.recommended ? `<span class="chip ok">RECOMMENDED</span>` : "", tierTag(e.tier),
-    e.tier === 2 ? `<span class="chip ok">confirmed</span>` : `<span class="chip warn">unconverged · rank only</span>`,
+    e.tier === 2 ? "" : `<span class="chip warn">unconverged · rank only</span>`,  // the T2 tag already says confirmed
     c.critic_vetoes.length ? (e.tier === 2 ? `<span class="chip">critic veto lifted by tier 2</span>` : `<span class="chip bad" title="${esc(c.critic_vetoes[0])}">critic veto</span>`) : "",
     c.open_metal_sites ? `<span class="chip">open metal sites</span>` : ""].join("");
   const bars = Object.values(c.features).map((f) => `<span>${esc(f.label)}</span><span class="v">${f.value}</span>

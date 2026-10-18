@@ -5,10 +5,7 @@
   grid-template-areas: "top top" "stage chat" "board timeline";
 }
 .ag-top { grid-area: top; display: flex; align-items: center; gap: 16px; background: var(--panel);
-  border: 1px solid var(--border); border-radius: 6px; padding: 8px 16px; }
-.tabs { display: flex; gap: 4px; }
-.tabs a { font-size: 13px; color: var(--ink-2); text-decoration: none; padding: 6px 12px; border-radius: 4px; border: 1px solid transparent; }
-.tabs a.on { color: var(--ink); border-color: var(--border); background: var(--bg); font-weight: 600; }
+  border: 1px solid var(--border); border-radius: var(--r); padding: 8px 16px; }
 .ag-vitals { display: flex; flex: 1; justify-content: center; }
 .ag-vitals .kv { padding: 2px 16px; }
 .ag-vitals .v.big { font-size: 28px; font-weight: 600; }
@@ -125,10 +122,6 @@
 /* ------------------------------------------------------------------ view switch + validation view */
 .ag-modes { display: flex; align-items: center; gap: 12px; padding: 6px 8px; height: 44px; min-width: 0; }
 .ag-modes > .dim { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); padding: 2px; flex: none; }
-.seg button { font: 500 13px var(--sans); color: var(--ink-2); background: none; border: 0; border-radius: 4px; padding: 5px 14px; cursor: pointer; }
-.seg button[aria-selected=true] { background: var(--accent-soft); color: var(--accent-ink); font-weight: 600; }
-.seg button:hover { color: var(--ink); }
 
 .val-app { display: flex; flex-direction: column; gap: 8px; padding: 0 8px 8px; min-width: 0; }
 .val-app .panel { overflow: visible; }
