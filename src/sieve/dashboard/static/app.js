@@ -42,12 +42,21 @@ const SENTENCES = {
     : p.what === "descriptor ranking" ? `ranked ${n0(p.n)} by descriptor score — top: ${name((p.top5 || [])[0])}` : p.what),
   veto: (p) => p.text || `veto — ${name(p.structure)} ${p.reason || ""}`,
   promote: (p) => p.text || `promoting ${n0(p.n)} candidate${p.n === 1 ? "" : "s"} to tier ${p.tier}`,
-  recommend: (p) => `recommends ${name(p.structure)} — ${f3(p.uptake)} mol/kg, tier ${p.tier}`,
+  recommend: (p) => p.aps != null
+    ? `recommends ${name(p.structure)} — APS ${f3(p.aps)} mol/kg (S ${(+p.S).toFixed(1)}, ΔN ${f3(p.dn)}), capture-checked`
+    : `recommends ${name(p.structure)} — ${f3(p.uptake)} mol/kg, tier ${p.tier}${p.disorder === "passed" ? " (disorder-resolved)" : ""}`,
+  phase: (p) => p.text || `phase: ${p.phase}`,
+  capture_required: (p) => p.text || `${name(p.structure)} needs a tier-3 capture check`,
+  disorder_check_required: (p) => p.text || `${name(p.structure)} needs a disorder re-measure`,
+  disorder_artifact: (p) => p.text || `${name(p.structure)}: disorder artifact`,
+  disorder_passed: (p) => p.text || `${name(p.structure)}: disorder check passed`,
   worker_start: (p) => `started, pid ${p.pid}`,
   worker_dead: (p) => `died (exit ${p.exitcode}) — ${p.requeued_tasks} task re-queued`,
   worker_restart: (p) => `restarted, replacing ${p.replaces}`,
   task_start: (p) => `simulating ${name(p.structure)} — tier ${p.tier}, ${p.mode}${p.build_grid ? " + grid" : ""}, est ${secs(p.est_cpu_s)}`,
-  task_done: (p) => `${name(p.structure)} — ${f3(p.uptake)} ± ${f3(p.err)} mol/kg (T${p.tier}, ${secs(p.cpu_s)})`,
+  task_done: (p) => p.tier === 3
+    ? `${name(p.structure)} — capture check: APS ${f3(p.aps)} ± ${f3(p.aps_err)}, S ${p.S == null ? "–" : (+p.S).toFixed(1)}, ΔN ${f3(p.dn)} mol/kg (T3, ${secs(p.cpu_s)})`
+    : `${name(p.structure)} — ${f3(p.uptake)} ± ${f3(p.err)} mol/kg (T${p.tier}, ${secs(p.cpu_s)})`,
   timeout: (p) => `TIMEOUT ${name(p.structure)} at ${secs(p.limit_cpu_s)} CPU, killed`,
   task_error: (p) => `error on ${name(p.structure)}: ${short(p.error || "", 48)}`,
   budget_refused: (p) => `skipped ${name(p.structure)} — does not fit the remaining budget`,
@@ -75,6 +84,8 @@ const VERBS = {
   agent_start: ["start", ""], agent_finish: ["finish", ""], agent_fail: ["fail", "bad"], agent_restart: ["restart", "good"],
   agent_tool: ["tool", ""], intervention: ["HUMAN", "bad"], delegate: ["spawn", "decision"], agent_exit: ["exit", ""],
   discovery: ["write", "good"],
+  phase: ["phase", "decision"], capture_required: ["needs T3", "veto"], disorder_check_required: ["needs check", "veto"],
+  disorder_artifact: ["artifact", "veto"], disorder_passed: ["check ok", "good"],
 };
 const FILTERS = {
   // starts show in the worker strip; model calls and usage are bookkeeping; the analyst's finish repeats its write-up
@@ -82,7 +93,8 @@ const FILTERS = {
     && !(e.type === "agent_finish" && e.agent === "analyst"),
   timeouts: (e) => e.type === "timeout" || e.type === "worker_dead",
   vetoes: (e) => e.type === "veto",
-  decisions: (e) => ["decision", "veto", "promote", "recommend", "round_end"].includes(e.type),
+  decisions: (e) => ["decision", "veto", "promote", "recommend", "round_end", "phase", "capture_required",
+    "disorder_check_required", "disorder_artifact", "disorder_passed"].includes(e.type),
 };
 const who = (e) => { const a = e.agent || "orchestrator"; return a.endsWith("-driver") ? "orchestrator" : a; };
 
@@ -157,7 +169,8 @@ const POLICY = {
 };
 function renderHero(f) {
   const v = f.vitals, r = f.run;
-  $("headline").textContent = r ? `${POLICY[r.arm] || r.arm}  Budget ${f2(r.budget_cpu_s / 3600)} CPU-h; ranking CO₂ uptake, not predicting it.` : "No run selected.";
+  const goal = f.objective === "capture" ? "screening CO₂ uptake, ranking finalists by flue-gas capture (APS)" : "ranking CO₂ uptake";
+  $("headline").textContent = r ? `${POLICY[r.arm] || POLICY[(r.arm || "").split("-")[0]] || r.arm}  Budget ${f2(r.budget_cpu_s / 3600)} CPU-h; ${goal}, not predicting it.${f.pool === "mixed" ? " Pool: CoRE MOFs + IZA zeolites." : ""}` : "No run selected.";
   if (!r || !v) return;
   $("h-int").textContent = v.interventions;
   $("s-spent").textContent = f2(v.spent_cpu_s / 3600);
@@ -166,14 +179,17 @@ function renderHero(f) {
   $("s-bar").style.width = `${pct}%`;
   $("s-inflight").style.left = `${pct}%`;
   $("s-inflight").style.width = `${Math.min(100 - pct, (100 * v.inflight_cpu_s) / r.budget_cpu_s)}%`;
-  $("s-counts").textContent = `${n0(v.counts.t0)} / ${n0(v.counts.t1)} / ${n0(v.counts.t2)}`;
+  const t3 = v.counts.t3 || f.objective === "capture";
+  $("s-counts").textContent = `${n0(v.counts.t0)} / ${n0(v.counts.t1)} / ${n0(v.counts.t2)}${t3 ? ` / ${n0(v.counts.t3)}` : ""}`;
+  $("s-counts-k").textContent = t3 ? "tier 0 / 1 / 2 / 3" : "tier 0 / 1 / 2";
   $("s-timeouts").textContent = n0(v.timeouts + (v.worker_restarts || 0));
   const b = v.best_t2 ? { ...v.best_t2, tier: 2 } : v.best;
   $("s-best").textContent = b ? f3(b.uptake_molkg) : "–";
   const chip = $("s-best-chip");
   chip.textContent = !b ? "" : b.tier === 2 ? "TIER-2 CONFIRMED" : "TIER 1 · ±18%";
   chip.className = `chip${b && b.tier === 2 ? " ok" : ""}`;
-  $("s-best-sub").textContent = b ? `${name(b.structure)} · ±${f3(b.uptake_err)} reported` : " ";
+  const caps = Object.entries(f.capture || {}).sort((a, c) => c[1].aps - a[1].aps);
+  $("s-best-sub").textContent = b ? `${name(b.structure)} · ±${f3(b.uptake_err)} reported${caps.length ? ` · best APS ${f3(caps[0][1].aps)} (${name(caps[0][0])}, T3)` : ""}` : " ";
 }
 
 // ------------------------------------------------------------------------------------- agents
@@ -264,7 +280,8 @@ const workers = {
     const nm = job.querySelector(".sname"), meta = job.querySelector(".smeta"), bar = job.querySelector(".sbar i");
     if (want.kind === "running") {
       const lim = w.limit_cpu_s || (w.est_cpu_s ? 4 * w.est_cpu_s : null), cpu = w.cpu_now || 0;
-      stEl.textContent = `TIER ${w.tier}`;
+      stEl.textContent = w.tier === 3 ? "TIER 3 · CAPTURE" : /_dres/.test(w.structure || "") ? `TIER ${w.tier} · DISORDER CHECK` : `TIER ${w.tier}`;
+      stEl.className = `st t${w.tier}`;
       nm.textContent = name(w.structure); nm.title = w.structure;
       meta.textContent = `${w.mode} · ${Math.round(cpu)} / ${lim ? Math.round(lim) : "?"}s CPU`;
       bar.style.width = `${lim ? Math.min(100, (100 * cpu) / lim) : 0}%`;
@@ -397,7 +414,7 @@ const pool = {
       const hit = this.qt.find(e.clientX - r.left, e.clientY - r.top, 10);
       if (!hit) { tip.hidden = true; return; }
       const m = this.measured[hit.name];
-      tip.textContent = `${hit.name}\nLCD ${hit.lcd.toFixed(2)} Å · void ${hit.vf.toFixed(3)}\n${m ? `${f3(m[0])} ± ${f3(m[1])} mol/kg (T${m[2]})` : "not measured"}`;
+      tip.textContent = `${hit.name}${hit.zeo ? " · zeolite (pure silica)" : ""}\nLCD ${hit.lcd.toFixed(2)} Å · void ${hit.vf.toFixed(3)}\n${m ? `${f3(m[0])} ± ${f3(m[1])} mol/kg (T${m[2]})` : "not measured"}`;
       tip.hidden = false;
       tip.style.left = `${Math.min(e.clientX - r.left + 12, r.width - 250)}px`;
       tip.style.top = `${Math.max(4, e.clientY - r.top - 64)}px`;
@@ -405,7 +422,8 @@ const pool = {
     plot.addEventListener("mouseleave", () => (tip.hidden = true));
   },
   setPoints(d) {
-    this.pts = d.points.map(([n, lcd, vf]) => ({ name: n, lcd, vf }));
+    this.pts = d.points.map(([n, lcd, vf, z]) => ({ name: n, lcd, vf, zeo: !!z }));
+    this.zeoCount = this.pts.filter((p) => p.zeo).length;
     this.byName = Object.fromEntries(this.pts.map((p) => [p.name, p]));
     $("p-count").textContent = `· ${n0(this.pts.length)} structures`;
     this.resize();
@@ -432,6 +450,7 @@ const pool = {
   },
   update(f) {
     const meas = f.measured || {};
+    if (this.mixed !== (f.pool === "mixed")) { this.mixed = f.pool === "mixed"; this.legendTop = null; }
     const now = performance.now();
     // on first load everything already measured appears settled; later arrivals animate in
     for (const s of Object.keys(meas)) if (!(s in this.firstSeen)) this.firstSeen[s] = this.primed ? now : -1e9;
@@ -453,7 +472,7 @@ const pool = {
   renderLegend(top) {
     if (this.legendTop === top) return;
     this.legendTop = top;
-    $("p-legend").innerHTML = `<span><span class="dot"></span>not measured</span><span><span class="dot" style="background:#fff;box-shadow:inset 0 0 0 1.5px #15171C"></span>tier-2 confirmed</span><span>0</span><span class="ramp" style="background:linear-gradient(90deg,#BFE5EA,#05505A)"></span><span>${top.toFixed(1)} mol/kg</span>`;
+    $("p-legend").innerHTML = `<span><span class="dot"></span>not measured</span><span><span class="dot" style="background:#fff;box-shadow:inset 0 0 0 1.5px #15171C"></span>tier-2 confirmed</span>${this.mixed ? `<span><span class="dot dia"></span>zeolite</span>` : ""}<span>0</span><span class="ramp" style="background:linear-gradient(90deg,#BFE5EA,#05505A)"></span><span>${top.toFixed(1)} mol/kg</span>`;
   },
   draw(now) {
     if (!this.x || !this.pts.length) return;
@@ -465,7 +484,11 @@ const pool = {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, this.W, this.H);
     ctx.fillStyle = "#C3C8D0"; ctx.globalAlpha = 0.6;
-    for (const p of this.pts) if (!this.measured[p.name]) ctx.fillRect(p.px - 1, p.py - 1, 2, 2);
+    for (const p of this.pts) {
+      if (this.measured[p.name] || (p.zeo && !this.mixed)) continue;  // zeolites only in a mixed-pool run
+      if (p.zeo) { ctx.save(); ctx.translate(p.px, p.py); ctx.rotate(0.785); ctx.fillRect(-1.6, -1.6, 3.2, 3.2); ctx.restore(); }
+      else ctx.fillRect(p.px - 1, p.py - 1, 2, 2);
+    }
     ctx.globalAlpha = 1;
     // measured structures lift (grow) and take their uptake colour; highest drawn last
     const ms = Object.entries(this.measured).filter(([n]) => this.byName[n]).sort((a, b) => a[1][0] - b[1][0]);
@@ -473,7 +496,10 @@ const pool = {
       const p = this.byName[n], g = Math.min(1, (now - (this.firstSeen[n] ?? -1e9)) / 600);
       const r = 1.5 + 2.6 * (1 - Math.pow(1 - g, 3)) + (m[2] === 2 ? 0.8 : 0);
       ctx.fillStyle = this.color ? this.color(m[0]) : ACCENT;
-      ctx.beginPath(); ctx.arc(p.px, p.py, r, 0, 6.283); ctx.fill();
+      ctx.beginPath();
+      if (p.zeo) { const q = r * 1.3; ctx.moveTo(p.px, p.py - q); ctx.lineTo(p.px + q, p.py); ctx.lineTo(p.px, p.py + q); ctx.lineTo(p.px - q, p.py); ctx.closePath(); }
+      else ctx.arc(p.px, p.py, r, 0, 6.283);
+      ctx.fill();
       ctx.lineWidth = 1.5; ctx.strokeStyle = m[2] === 2 ? "#15171C" : "#FFFFFF"; ctx.stroke();
     }
     // the last round's picks: a comet trail, head = most recent pick, fading out

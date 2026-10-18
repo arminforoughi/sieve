@@ -87,3 +87,10 @@ a.wf-step:hover { border-color: var(--accent); box-shadow: 0 1px 6px rgba(11, 13
 .wf-rec-rules { margin-top: 12px; }
 @media (max-width: 1000px) { .wf-trees { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 700px) { .wf-human ul { columns: 1; } .wf-who-tbl td:first-child { white-space: normal; } }
+
+/* 7 steps when the run has a capture objective (tier-3 capture check before the recommendation) */
+.wf-steps:has(> li:nth-child(7)) { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.wf-step.t3 { border-color: var(--violet); }
+.wf-step.t3 .wf-n { background: var(--violet); color: #fff; }
+@media (max-width: 1180px) { .wf-steps:has(> li:nth-child(7)) { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 700px) { .wf-steps:has(> li:nth-child(7)) { grid-template-columns: minmax(0, 1fr); } }

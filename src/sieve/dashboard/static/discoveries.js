@@ -8,13 +8,18 @@ const short = (s) => (s || "").replace(/_clean$/, "");
 const tierTag = (t) => (t === 2 ? `<span class="tier t2" title="tier 2: 400+2000 cycles, confirmed">T2</span>`
   : `<span class="tier t1" title="tier 1: 100+500 cycles, not converged; rank only">T1</span>`);
 const sciURL = (s) => `/science?name=${encodeURIComponent(s)}`;
-const S = { run: null, scope: "run", rows: [], sort: { k: "uptake", dir: -1 }, runs: [] };
+const S = { run: null, scope: "run", rows: [], sort: { k: "uptake", dir: -1 }, runs: [], fam: "", hasCap: false, hasZeo: false };
+const badges = (r) => (window.Shell ? Shell.fam(r.structure) + Shell.dis(r.disordered) : "");
+const cap = (r) => r.capture || {};
 
 const COLS = [
   { k: "rank", t: "#", n: true, nosort: true },
   { k: "structure", t: "structure" },
   { k: "uptake", t: "uptake mol/kg ± 1σ", n: true },
   { k: "tier", t: "tier", n: true },
+  { k: "aps", t: "APS mol/kg ± 1σ", n: true, cap: true },
+  { k: "Smix", t: "S(CO₂/N₂)", n: true, cap: true },
+  { k: "dn", t: "ΔN mol/kg", n: true, cap: true },
   { k: "t1", t: "T1 mean", n: true },
   { k: "t2", t: "T2", n: true },
   { k: "PLD", t: "PLD Å", n: true },
@@ -34,7 +39,7 @@ async function boot() {
   const has = (id) => summary.some((r) => r.run_id === id && r.n_t1 + r.n_t2 > 0);
   // the requested run, else the last one viewed, else the newest SIEVE run with measurements, else any run with data
   const want = [params.get("run"), window.Shell && Shell.run].find((r) => r && cfg.runs.some((x) => x.run_id === r))
-    || (summary.find((r) => r.arm === "sieve" && has(r.run_id)) || summary.find((r) => has(r.run_id)) || cfg.runs[0] || {}).run_id;
+    || (summary.find((r) => (r.arm || "").startsWith("sieve") && has(r.run_id)) || summary.find((r) => has(r.run_id)) || cfg.runs[0] || {}).run_id;
   const sel = $("run-select");
   for (const r of cfg.runs) sel.appendChild(new Option(`${r.run_id} · ${r.arm}`, r.run_id, false, r.run_id === want));
   sel.onchange = () => { params.set("run", sel.value); location.search = params.toString(); };
@@ -45,6 +50,7 @@ async function boot() {
   $("scope").onclick = (e) => { const b = e.target.closest("button"); if (!b) return; S.scope = b.dataset.s;
     document.querySelectorAll("#scope button").forEach((x) => x.classList.toggle("on", x === b)); loadBoard(); };
   $("filter").oninput = renderBoard; $("only-t2").onchange = renderBoard;
+  $("fam").onchange = () => { S.fam = $("fam").value; renderBoard(); };
   renderSummary();
   loadBoard();
   loadCards();
@@ -58,7 +64,8 @@ function renderSummary() {
   const stat = (k, v, s) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s}</div></div>`;
   const b2 = r.best_t2, b1 = r.best_t1;
   let html = stat("Status", esc(r.status), `${esc(r.arm)} arm · ${fx(r.spent_cpu_s / 3600)} of ${fx(r.budget_cpu_s / 3600)} CPU-h spent`)
-    + stat("Measured by GCMC", `${r.n_t1} <small>T1</small> · ${r.n_t2} <small>T2</small>`, "distinct structures per tier")
+    + stat("Measured by GCMC", `${r.n_t1} <small>T1</small> · ${r.n_t2} <small>T2</small>${r.n_t3 ? ` · ${r.n_t3} <small>T3</small>` : ""}`,
+      `distinct structures per tier · objective: ${r.objective === "capture" ? "capture (APS)" : "1-bar uptake"}${r.pool === "mixed" ? " · MOFs + zeolites" : ""}`)
     + stat(`Best confirmed ${tierTag(2)}`, b2 ? `${fx(b2.uptake)} <small>± ${fx(b2.err)}</small>` : "–", b2 ? `<a href="${sciURL(b2.structure)}">${esc(short(b2.structure))}</a>` : "no tier-2 confirmation yet: no winner can be named")
     + stat(`Best not yet confirmed ${tierTag(1)}`, b1 ? `${fx(b1.uptake)} <small>± ${fx(b1.err)}</small>` : "–", b1 ? `<a href="${sciURL(b1.structure)}">${esc(short(b1.structure))}</a> · unconverged, rank only` : "–");
   if (top2 && b2 && top2.run_id !== r.run_id && top2.best_t2.uptake > b2.uptake + b2.err)
@@ -71,7 +78,10 @@ async function loadBoard() {
   $("lb").innerHTML = `<tbody><tr><td><span class="spin"></span> Loading measurements…</td></tr></tbody>`;
   try {
     const d = await fetch(`/api/leaderboard?run=${encodeURIComponent(S.scope === "all" ? "*" : S.run)}`).then((r) => r.json());
-    S.rows = d.rows || [];
+    S.rows = (d.rows || []).filter((r) => !r.resolved_of);  // disorder re-measures show inside their original's row
+    S.hasCap = !!d.has_capture; S.hasZeo = !!d.has_zeolites;
+    if (d.objective === "capture" && S.hasCap && S.sort.k === "uptake") S.sort = { k: "aps", dir: -1 };
+    $("fam-wrap").hidden = !S.hasZeo;
   } catch (e) { $("lb").innerHTML = `<tbody><tr><td class="note">Could not load the leaderboard: ${esc(e.message)}</td></tr></tbody>`; return; }
   $("lb-sub").textContent = S.scope === "all" ? "· all runs, each structure at its highest tier" : `· ${S.run}`;
   renderBoard();
@@ -80,8 +90,10 @@ async function loadBoard() {
 function visibleRows() {
   const q = $("filter").value.trim().toLowerCase(), t2 = $("only-t2").checked;
   const { k, dir } = S.sort;
-  const val = (r) => (k === "metals" ? (r.metals || []).join(" ") : k === "oms" ? (r.oms ? 1 : 0) : k === "S" ? selOf(r) : r[k]);
-  return S.rows.filter((r) => (!t2 || r.tier === 2) && (!q || r.structure.toLowerCase().includes(q) || (r.metals || []).join(" ").toLowerCase().includes(q)))
+  const val = (r) => (k === "metals" ? (r.metals || []).join(" ") : k === "oms" ? (r.oms ? 1 : 0) : k === "S" ? selOf(r)
+    : k === "aps" ? cap(r).aps : k === "Smix" ? cap(r).S : k === "dn" ? cap(r).dn : r[k]);
+  return S.rows.filter((r) => (!t2 || r.tier === 2) && (!S.fam || r.family === S.fam)
+      && (!q || r.structure.toLowerCase().includes(q) || (r.metals || []).join(" ").toLowerCase().includes(q)))
     .sort((a, b) => { const x = val(a), y = val(b); if (x == null) return 1; if (y == null) return -1; return (x > y ? 1 : x < y ? -1 : 0) * dir; });
 }
 
@@ -90,14 +102,17 @@ const selOf = (r) => (r.props && r.props.S ? r.props.S.v : null);
 
 function renderBoard() {
   const anyProps = S.rows.some((r) => selOf(r) != null);  // the column exists only where props were computed
-  const cols = COLS.filter((c) => (!c.all || S.scope === "all") && (!c.props || anyProps));
+  const cols = COLS.filter((c) => (!c.all || S.scope === "all") && (!c.props || anyProps) && (!c.cap || S.hasCap));
   const rows = visibleRows();
   const head = `<thead><tr>${cols.map((c) => `<th class="${c.n ? "n" : ""} ${c.nosort ? "" : "sort"}" data-k="${c.k}" ${S.sort.k === c.k ? `aria-sort="${S.sort.dir > 0 ? "ascending" : "descending"}"` : ""}>${c.t}</th>`).join("")}</tr></thead>`;
   const body = rows.length ? rows.map((r, i) => `<tr class="click" data-s="${esc(r.structure)}">
       <td class="rk">${i + 1}</td>
-      <td class="name"><a href="${sciURL(r.structure)}">${esc(short(r.structure))}</a>${r.science ? `<span class="sci-dot" title="isotherm and binding pockets already computed"></span>` : ""}</td>
-      <td class="n">${fx(r.uptake)} <span class="pm">± ${fx(r.err)}</span></td>
+      <td class="name"><a href="${sciURL(r.structure)}">${esc(short(r.structure))}</a>${r.science ? `<span class="sci-dot" title="isotherm and binding pockets already computed"></span>` : ""} ${badges(r)}</td>
+      <td class="n">${fx(r.uptake)} <span class="pm">± ${fx(r.err)}</span>${r.resolved ? `<div class="res" title="tier-2 re-measure on the disorder-resolved CIF (overlapping atoms removed)">resolved ${fx(r.resolved.uptake)} ± ${fx(r.resolved.err)}</div>` : ""}</td>
       <td class="n">${tierTag(r.tier)}</td>
+      ${S.hasCap ? (r.capture ? `<td class="n">${fx(cap(r).aps)} <span class="pm">± ${fx(cap(r).aps_err)}</span> <span class="tier t3">T3</span></td>
+        <td class="n">${fx(cap(r).S, 1)} <span class="pm">± ${fx(cap(r).S_err, 1)}</span></td><td class="n">${fx(cap(r).dn, 3)}</td>`
+        : `<td class="n" title="no capture check (tier 3) for this structure">–</td><td class="n">–</td><td class="n">–</td>`) : ""}
       <td class="n">${fx(r.t1)}</td><td class="n">${fx(r.t2)}</td>
       <td class="n">${fx(r.PLD)}</td><td class="n">${fx(r.LCD)}</td><td class="n">${fx(r.VF)}</td><td class="n">${fx(r.density)}</td>
       <td class="metal">${esc((r.metals || []).join(" ") || "–")}</td><td>${r.oms ? "yes" : r.oms === false ? "no" : "–"}</td>
@@ -111,8 +126,11 @@ function renderBoard() {
   }));
   $("lb").querySelector("tbody").onclick = (e) => { if (e.target.closest("a")) return; const tr = e.target.closest("tr[data-s]"); if (tr) location.href = sciURL(tr.dataset.s); };
   const cs = cols.filter((c) => c.k !== "rank");
-  const csv = [["rank", ...cs.map((c) => c.k === "uptake" ? "uptake_molkg,err_molkg" : c.k === "S" ? "selectivity_co2_n2,selectivity_err" : c.k)].join(",")]
-    .concat(rows.map((r, i) => [i + 1, ...cs.map((c) => c.k === "uptake" ? `${r.uptake},${r.err}` : c.k === "S" ? (selOf(r) != null ? `${r.props.S.v},${r.props.S.e}` : ",") : c.k === "metals" ? (r.metals || []).join(" ") : r[c.k] ?? "")].join(",")));
+  const csv = [["rank", ...cs.map((c) => c.k === "uptake" ? "uptake_molkg,err_molkg" : c.k === "S" ? "selectivity_co2_n2,selectivity_err"
+      : c.k === "aps" ? "aps_molkg,aps_err" : c.k === "Smix" ? "S_mix,S_mix_err" : c.k === "dn" ? "dN_mix_molkg" : c.k), "family", "disordered_atom_fraction"].join(",")]
+    .concat(rows.map((r, i) => [i + 1, ...cs.map((c) => c.k === "uptake" ? `${r.uptake},${r.err}` : c.k === "S" ? (selOf(r) != null ? `${r.props.S.v},${r.props.S.e}` : ",")
+      : c.k === "aps" ? `${cap(r).aps ?? ""},${cap(r).aps_err ?? ""}` : c.k === "Smix" ? `${cap(r).S ?? ""},${cap(r).S_err ?? ""}` : c.k === "dn" ? (cap(r).dn ?? "")
+      : c.k === "metals" ? (r.metals || []).join(" ") : r[c.k] ?? ""), r.family || "MOF", r.disordered ?? ""].join(",")));
   const a = $("csv");
   if (a.dataset.url) URL.revokeObjectURL(a.dataset.url);
   a.dataset.url = a.href = URL.createObjectURL(new Blob([csv.join("\n") + "\n"], { type: "text/csv" }));
@@ -144,7 +162,12 @@ function card(c, i) {
   const tags = [c.recommended ? `<span class="chip ok">RECOMMENDED</span>` : "", tierTag(e.tier),
     e.tier === 2 ? "" : `<span class="chip warn">unconverged · rank only</span>`,  // the T2 tag already says confirmed
     c.critic_vetoes.length ? (e.tier === 2 ? `<span class="chip">critic veto lifted by tier 2</span>` : `<span class="chip bad" title="${esc(c.critic_vetoes[0])}">critic veto</span>`) : "",
-    c.open_metal_sites ? `<span class="chip">open metal sites</span>` : ""].join("");
+    c.open_metal_sites ? `<span class="chip">open metal sites</span>` : "",
+    window.Shell ? Shell.fam(c.structure) + Shell.dis((c.flags || {}).dis) : ""].join("");
+  const cc = c.capture_check;
+  const capRow = cc ? `<div class="capbox"><span class="tier t3">T3</span> capture check${cc.on && cc.on !== c.structure ? " (on the disorder-resolved CIF)" : ""}:
+      <b>APS ${fx(cc.aps, 3)}</b> ± ${fx(cc.aps_err, 3)} mol/kg · S(CO₂/N₂) ${fx(cc.S, 1)} ± ${fx(cc.S_err, 1)} · ΔN ${fx(cc.dn, 3)} mol/kg</div>` : "";
+  const resRow = (c.disorder_resolved_measurements || []).length ? `<div class="meas">disorder-resolved CIF: ${c.disorder_resolved_measurements.map((m) => `T${m.tier} ${fx(m.uptake, 3)} ± ${fx(m.err, 3)}`).join(" · ")} mol/kg</div>` : "";
   const bars = Object.values(c.features).map((f) => `<span>${esc(f.label)}</span><span class="v">${f.value}</span>
       <div class="track" title="${f.percentile}th percentile of the pool"><i style="left:${f.percentile}%"></i></div>`).join("");
   const meas = c.measurements.map((m) => `<div>T${m.tier} ${fx(m.uptake, 3)} ± ${fx(m.err, 3)} mol/kg · ${m.cpu_s} CPU-s · ${esc(m.mode)}</div>`).join("");
@@ -162,6 +185,7 @@ function card(c, i) {
     <div class="bars">${bars}
       <span>metals</span><span class="v">${esc((c.metals || []).join(" ") || "–")}</span>
       <span>density</span><span class="v">${c.density_g_cm3 ?? "–"}</span></div>
+    ${capRow}${resRow}
     ${c.true_value != null ? `<div class="meas">independent tier-2 re-measurement: ${fx(c.true_value, 3)} mol/kg</div>` : ""}
     <div class="meas">${meas}</div>
     ${why ? `<div class="who"><b>Why it was picked.</b><br>${why}</div>` : ""}

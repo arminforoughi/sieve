@@ -35,5 +35,17 @@
     });
   }
   setRun(run);
-  window.Shell = { setRun, get run() { return run; } };
+  // badges shared by every page: material family (zeolite; MOF only where the run mixes both),
+  // disorder flag (fraction of atoms in clashing pairs) and tier tags incl. tier 3 (capture check)
+  const esc = (x) => String(x ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  function fam(nameOrFlags, showMof) {
+    const z = typeof nameOrFlags === "string" ? nameOrFlags.startsWith("IZA-") : (nameOrFlags || {}).fam === "zeolite";
+    return z ? `<span class="fam" title="IZA zeolite: pure-silica framework, no cations; compared on geometry only">zeolite</span>`
+      : showMof ? `<span class="fam mof" title="CoRE MOF 2019">MOF</span>` : "";
+  }
+  function dis(frac) {
+    return frac ? `<span class="dis" title="disordered: ${esc((100 * frac).toFixed(1))}% of atoms sit in pairs closer than any bond (doubled sites in the CIF)">disordered</span>` : "";
+  }
+  const tier = (t) => `<span class="tier t${t}"${t === 3 ? ' title="tier 3: capture check (15:85 CO2/N2 mixture + 0.01 bar desorption)"' : ""}>T${t}</span>`;
+  window.Shell = { setRun, get run() { return run; }, fam, dis, tier, esc };
 })();

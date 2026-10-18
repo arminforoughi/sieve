@@ -49,6 +49,13 @@ def stages(db: str, run_id: str) -> dict:
                       (run_id,)).fetchone()
     rec = json.loads(rec[0]) if rec else None
     spent = _one(con, "SELECT COALESCE(SUM(cpu_s), 0) FROM evaluations WHERE run_id=?", run_id)
+    zeo = _one(con, "SELECT COUNT(*) FROM tasks WHERE run_id=? AND tier=0 AND structure LIKE 'IZA-%'", run_id)
+    dres = _one(con, "SELECT COUNT(*) FROM tasks WHERE run_id=? AND structure LIKE '%\\_dres%' ESCAPE '\\'", run_id)
+    fam = con.execute("SELECT payload_json FROM events WHERE run_id=? AND type='decision' AND agent_id='scout' AND "
+                      "payload_json LIKE '%\"families\"%' ORDER BY event_id DESC LIMIT 1", (run_id,)).fetchone()
+    fam = json.loads(fam[0]).get("families") if fam else None
+    fam_ids = {r[0].split("/")[1] for r in con.execute(
+        "SELECT DISTINCT agent_id FROM events WHERE run_id=? AND agent_id LIKE 'scout/%'", (run_id,))}
     agentic = (row["arm"] or "").startswith("sieve")
     return {
         "run": {"run_id": run_id, "arm": row["arm"], "status": row["status"], "agentic": agentic,
@@ -56,16 +63,26 @@ def stages(db: str, run_id: str) -> dict:
                 "design": cfg.get("agent_design"), "policy": cfg.get("policy") or {},
                 "objective": cfg.get("objective", "uptake"), "pool": cfg.get("pool")},
         "models": models,
-        "describe": {"structures": t(0)},
+        "describe": {"structures": t(0), "zeolites": zeo},
         "scout": {"calls": ev("agent_finish", "scout%"), "sub_scouts": _one(
-            con, "SELECT COUNT(DISTINCT agent_id) FROM events WHERE run_id=? AND agent_id LIKE 'scout/%'", run_id)} if agentic else None,
+            con, "SELECT COUNT(DISTINCT agent_id) FROM events WHERE run_id=? AND agent_id LIKE 'scout/%'", run_id),
+            # material families: from the scout's merged report, else from its sub-scouts' ids (z* = zeolite)
+            "mof_families": (sum(1 for f in fam.values() if f.get("class") != "zeolite") if fam
+                             else sum(1 for f in fam_ids if f.startswith("f"))),
+            "zeolite_families": (sum(1 for f in fam.values() if f.get("class") == "zeolite") if fam
+                                 else sum(1 for f in fam_ids if f.startswith("z")))} if agentic else None,
         "allocate": {"calls": ev("agent_finish", "allocator%"), "random_slice": rand,
                      "rounds": ev("round_end")} if agentic else {"rounds": ev("round_end")},
-        "simulate": {"tier1": t(1), "tier2": t(2), "tier3": t(3), "timeouts": t(1, "timeout") + t(2, "timeout") + t(3, "timeout")},
+        "simulate": {"tier1": t(1), "tier2": t(2), "tier3": t(3), "timeouts": t(1, "timeout") + t(2, "timeout") + t(3, "timeout"),
+                     "disorder_remeasures": dres},
         "critique": {"calls": ev("agent_finish", "critic%"), "vetoes": ev("veto"),
                      "sub_critics": _one(con, "SELECT COUNT(DISTINCT agent_id) FROM events WHERE run_id=? AND agent_id LIKE 'critic/%'", run_id),
-                     "disorder_flags": ev("disorder_artifact")} if agentic else None,
-        "recommend": {"structure": rec.get("structure"), "uptake": rec.get("uptake"), "tier": rec.get("tier")} if rec else None,
+                     "disorder_flags": ev("disorder_artifact"), "disorder_required": ev("disorder_check_required"),
+                     "disorder_passed": ev("disorder_passed"), "capture_required": ev("capture_required")} if agentic else None,
+        "capture": {"checks": t(3), "required": ev("capture_required")} if cfg.get("objective") == "capture" else None,
+        "recommend": {"structure": rec.get("structure"), "uptake": rec.get("uptake"), "tier": rec.get("tier"),
+                      "aps": rec.get("aps"), "S": rec.get("S"), "dn": rec.get("dn"),
+                      "disorder": rec.get("disorder")} if rec else None,
         "llm_calls": ev("llm_usage"),
     }
 

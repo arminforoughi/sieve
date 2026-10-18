@@ -58,12 +58,87 @@ def curve(con: sqlite3.Connection, run_id: str, T: float) -> list[list[float]]:
             "status NOT IN ('running') AND finished_at <= ? ORDER BY finished_at",
             (run_id, T)):
         spent += r["cpu_s"] or 0.0
-        if r["status"] == "ok" and r["tier"] > 0 and (best is None or r["uptake_molkg"] > best):
+        if r["status"] == "ok" and r["tier"] in (1, 2) and r["uptake_molkg"] is not None \
+                and (best is None or r["uptake_molkg"] > best):
             best = r["uptake_molkg"]
             pts.append([round(spent / 3600, 4), round(best, 4)])
     if best is not None:
         pts.append([round(spent / 3600, 4), round(best, 4)])
     return pts
+
+
+def _capture_upto(con: sqlite3.Connection, run_id: str, T: float) -> dict:
+    """structure -> capture-check brief (APS, S, dN) from tier-3 rows finished by T."""
+    from sieve.capture import brief
+    out = {}
+    for s, rj in con.execute("SELECT structure, result_json FROM evaluations WHERE run_id=? AND tier=3 AND "
+                             "status='ok' AND finished_at<=? ORDER BY finished_at", (run_id, T)):
+        c = (json.loads(rj or "{}") or {}).get("capture")
+        if c and c.get("aps") is not None:
+            out[s] = brief(c)
+    return out
+
+
+@lru_cache(maxsize=1)
+def _disorder_table() -> dict:
+    try:
+        from sieve import disorder
+        return {k: v for k, v in disorder.load().items() if v.get("disordered")}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def flags(names) -> dict:
+    """Per structure: material family (MOF / zeolite), disordered (atoms closer than any bond), and
+    whether it is a disorder-resolved re-measure of another structure."""
+    dis = _disorder_table()
+    out = {}
+    for s in names:
+        f = {}
+        if s.startswith("IZA-"):
+            f["fam"] = "zeolite"
+        if "_dres" in s:
+            f["resolved_of"] = s.replace("_dres", "")
+        d = dis.get(s)
+        if d:
+            f["dis"] = round(d.get("clash_atom_fraction") or 0, 3)
+        if f:
+            out[s] = f
+    return out
+
+
+def _flow(con: sqlite3.Connection, run, run_id: str, T: float, measured: dict) -> dict:
+    """What the agent flow strip needs: objective/pool of the run, current phase, tier-3 results,
+    finalist checks, and family / disorder flags of everything listed."""
+    cfg = json.loads(run["config_json"] or "{}")
+    ph = con.execute("SELECT payload_json FROM events WHERE run_id=? AND type='phase' AND ts<=? "
+                     "ORDER BY event_id DESC LIMIT 1", (run_id, T)).fetchone()
+    cap = _capture_upto(con, run_id, T)
+    n = lambda t: con.execute("SELECT COUNT(*) FROM events WHERE run_id=? AND type=? AND ts<=?",  # noqa: E731
+                              (run_id, t, T)).fetchone()[0]
+    tiers = {(r[0], r[1]): r[2] for r in con.execute(
+        "SELECT tier, status, COUNT(*) FROM tasks WHERE run_id=? AND created_at<=? GROUP BY tier, status", (run_id, T))}
+    jobs = {t: {"queued": tiers.get((t, "queued"), 0), "running": tiers.get((t, "running"), 0),
+                "done": tiers.get((t, "done"), 0)} for t in (1, 2, 3)}
+    extra = {
+        "random_slice": con.execute("SELECT COUNT(*) FROM tasks WHERE run_id=? AND reason LIKE 'random slice%' "
+                                    "AND created_at<=?", (run_id, T)).fetchone()[0],
+        "disorder_jobs": con.execute("SELECT COUNT(*) FROM tasks WHERE run_id=? AND structure LIKE '%\\_dres%' "
+                                     "ESCAPE '\\' AND created_at<=?", (run_id, T)).fetchone()[0]}
+    fams = con.execute("SELECT payload_json FROM events WHERE run_id=? AND type='decision' AND agent_id='scout' "
+                       "AND payload_json LIKE '%\"families\"%' AND ts<=? ORDER BY event_id DESC LIMIT 1",
+                       (run_id, T)).fetchone()
+    return {
+        "objective": cfg.get("objective", "uptake"), "pool": "mixed" if str(cfg.get("pool", "")).startswith("mixed") else "mof",
+        "disorder_check": bool(cfg.get("disorder_check")),
+        "phase": json.loads(ph[0]) if ph else None,
+        "capture": cap,
+        "flow": {"jobs": jobs, **extra, "vetoes": n("veto"), "capture_required": n("capture_required"),
+                 "disorder_required": n("disorder_check_required"), "disorder_artifacts": n("disorder_artifact"),
+                 "disorder_passed": n("disorder_passed"),
+                 "families": json.loads(fams[0]).get("families") if fams else None},
+        "flags": flags(set(measured) | set(cap)),
+    }
 
 
 def frame(db: str, run_id: str | None, T: float) -> dict:
@@ -93,10 +168,12 @@ def frame(db: str, run_id: str | None, T: float) -> dict:
     ev_counts = {r[0]: r[1] for r in q(
         "SELECT type, COUNT(*) FROM events WHERE run_id=? AND ts<=? GROUP BY type", T)}
     best = q("SELECT structure, tier, uptake_molkg, uptake_err FROM evaluations WHERE run_id=? AND "
-             "status='ok' AND tier>0 AND finished_at<=? ORDER BY uptake_molkg DESC LIMIT 1",
+             "status='ok' AND tier IN (1, 2) AND finished_at<=? AND structure NOT LIKE '%\\_dres%' ESCAPE '\\' "
+             "ORDER BY uptake_molkg DESC LIMIT 1",
              T).fetchone()
     best_t2 = q("SELECT structure, uptake_molkg, uptake_err FROM evaluations WHERE run_id=? AND "
-                "status='ok' AND tier=2 AND finished_at<=? ORDER BY uptake_molkg DESC LIMIT 1",
+                "status='ok' AND tier=2 AND finished_at<=? AND structure NOT LIKE '%\\_dres%' ESCAPE '\\' "
+                "ORDER BY uptake_molkg DESC LIMIT 1",
                 T).fetchone()
     spend = [dict(r) for r in q(
         "SELECT json_extract(payload_json,'$.model') AS model, "
@@ -107,7 +184,7 @@ def frame(db: str, run_id: str | None, T: float) -> dict:
         "spent_cpu_s": spent, "inflight_cpu_s": inflight,
         "interventions": ev_counts.get("intervention", 0),
         "best": dict(best) if best else None, "best_t2": dict(best_t2) if best_t2 else None,
-        "counts": {"t0": counts.get(0, 0), "t1": counts.get(1, 0), "t2": counts.get(2, 0)},
+        "counts": {"t0": counts.get(0, 0), "t1": counts.get(1, 0), "t2": counts.get(2, 0), "t3": counts.get(3, 0)},
         "timeouts": timeouts, "lost": lost,
         "worker_restarts": ev_counts.get("worker_restart", 0),
         "resumes": ev_counts.get("run_resume", 0), "vetoes": ev_counts.get("veto", 0),
@@ -185,12 +262,13 @@ def frame(db: str, run_id: str | None, T: float) -> dict:
     # every structure measured so far (best estimate at its highest tier) for the pool scatter
     measured: dict[str, list] = {}
     for r in q("SELECT structure, tier, uptake_molkg, uptake_err, finished_at FROM evaluations "
-               "WHERE run_id=? AND status='ok' AND tier>0 AND finished_at<=? ORDER BY finished_at",
+               "WHERE run_id=? AND status='ok' AND tier IN (1, 2) AND finished_at<=? ORDER BY finished_at",
                T):
         m = measured.get(r[0])
         if m is None or r[1] >= m[2]:
             measured[r[0]] = [round(r[2], 4), round(r[3], 4), r[1], round(r[4], 2)]
     out["measured"] = measured
+    out.update(_flow(con, run, run_id, T, measured))
     last = q("SELECT MAX(round_no) FROM tasks WHERE run_id=? AND tier>0 AND created_at<=?",
              T).fetchone()[0]
     out["last_round"] = {"round": last, "picks": [r[0] for r in q(
@@ -237,9 +315,10 @@ def frame(db: str, run_id: str | None, T: float) -> dict:
     curves = {}
     for arm in ARMS:
         # the selected run for its own arm, else that arm's most recent run (running or not)
-        row = con.execute("SELECT run_id FROM runs WHERE arm=? AND created_at<=? "
+        # "sieve" stands for every agent variant (sieve-v5, sieve-dsv4, ...)
+        row = con.execute("SELECT run_id FROM runs WHERE (arm=? OR (?='sieve' AND arm LIKE 'sieve-%')) AND created_at<=? "
                           "ORDER BY (run_id=?) DESC, created_at DESC LIMIT 1",
-                          (arm, T, run_id)).fetchone()
+                          (arm, arm, T, run_id)).fetchone()
         if row:
             curves[arm] = {"run_id": row[0], "points": curve(con, row[0], T)}
     out["curves"] = curves
@@ -290,7 +369,7 @@ def verdict(con: sqlite3.Connection, run_id: str, T: float) -> dict | None:
         if rec:
             pick = json.loads(rec[0]).get("structure")
         else:
-            pick = max(est, key=lambda s: est[s].uptake) if est else None
+            pick = max((s for s in est if "_dres" not in s), key=lambda s: est[s].uptake, default=None)
         if not pick:
             continue
         e = est.get(pick)
@@ -318,7 +397,7 @@ def discoveries(db: str, run_id: str) -> dict:
     st = Store(db)
     con = st.con
     est = estimates_from_evaluations(con, run_id)
-    ranked = sorted(est.values(), key=lambda e: e.uptake, reverse=True)[:6]
+    ranked = sorted((e for e in est.values() if "_dres" not in e.structure), key=lambda e: e.uptake, reverse=True)[:6]
     notes = {}
     for (p,) in con.execute("SELECT payload_json FROM events WHERE run_id=? AND type='discovery' ORDER BY event_id",
                             (run_id,)):
@@ -337,7 +416,7 @@ def discoveries(db: str, run_id: str) -> dict:
         dos = dossier(st, run_id, e.structure, pct)
         dos.update(rank=i, estimate={"uptake": e.uptake, "err": e.err, "tier": e.tier},
                    note=notes.get(e.structure), recommended=e.structure == rec,
-                   true_value=(truth or {}).get(e.structure))
+                   true_value=(truth or {}).get(e.structure), flags=flags([e.structure]).get(e.structure, {}))
         cards.append(dos)
     return {"run": dict(run) if run else None, "cards": cards, "explained": bool(notes)}
 
@@ -369,10 +448,10 @@ def pool_points() -> dict:
 
     core = core_descriptors()
     pts = []
-    for c in load_candidates():
+    for c in load_candidates(pool="mixed"):  # MOFs, then IZA zeolites (4th field 1) with computed descriptors
         d = core.get(c.name) or {}
         if d.get("LCD") is not None and d.get("AV_VF") is not None:
-            pts.append([c.name, round(d["LCD"], 3), round(d["AV_VF"], 4)])
+            pts.append([c.name, round(d["LCD"], 3), round(d["AV_VF"], 4)] + ([1] if c.family == "zeolite" else []))
     return {"x": "largest cavity diameter (A)", "y": "void fraction", "points": pts}
 
 
@@ -572,9 +651,13 @@ def leaderboard(db: str, run_id: str) -> dict:
     runs = {r["run_id"]: r for r in list_runs(db)}
     ids = list(runs) if run_id == "*" else [run_id]
     merged: dict[str, dict] = {}
+    from sieve.capture import brief, estimates as cap_est
+    caps: dict[str, dict] = {}
     for rid in ids:
         if rid not in runs:
             continue
+        for s, c in cap_est(con, rid).items():
+            caps.setdefault(s, brief(c))
         for s, e in _estimates(con, rid).items():
             row = {"structure": s, "uptake": round(e.uptake, 4), "err": round(e.err, 4), "tier": e.tier,
                    "n": e.n_evals, "run": rid, "arm": runs[rid]["arm"],
@@ -585,14 +668,30 @@ def leaderboard(db: str, run_id: str) -> dict:
             if prev is None or (row["tier"], -row["err"]) > (prev["tier"], -prev["err"]):
                 merged[s] = row
     idx = pool_index()
+    fl = flags(set(merged) | set(caps))
     rows = []
     for s, r in merged.items():
         d = idx.get(s, {})
+        if not d and s.startswith("IZA-"):
+            from sieve.oracle import core_descriptors
+            z = core_descriptors().get(s) or {}
+            d = {"PLD": z.get("PLD"), "LCD": z.get("LCD"), "VF": z.get("AV_VF"), "density": z.get("density"),
+                 "metals": [], "oms": False}
+        f = fl.get(s, {})
+        res = f"{s[:-len('_clean')]}_dres_clean" if s.endswith("_clean") else f"{s}_dres_clean"
         rows.append({**r, "PLD": d.get("PLD"), "LCD": d.get("LCD"), "VF": d.get("VF"),
                      "density": d.get("density"), "metals": d.get("metals", []), "oms": d.get("oms"),
-                     "science": _science_ready(s), "props": _props_brief(s)})
+                     "science": _science_ready(s), "props": _props_brief(s),
+                     "family": f.get("fam", "MOF"), "disordered": f.get("dis"), "resolved_of": f.get("resolved_of"),
+                     "capture": caps.get(s) or caps.get(res),
+                     "resolved": ({"uptake": merged[res]["uptake"], "err": merged[res]["err"]} if res in merged else None)})
     rows.sort(key=lambda r: r["uptake"], reverse=True)
-    return {"run": dict(runs[run_id]) if run_id in runs else None, "rows": rows}
+    obj = None
+    if run_id in runs:
+        cfg = con.execute("SELECT config_json FROM runs WHERE run_id=?", (run_id,)).fetchone()
+        obj = json.loads(cfg[0] or "{}").get("objective", "uptake") if cfg else None
+    return {"run": dict(runs[run_id]) if run_id in runs else None, "rows": rows, "objective": obj,
+            "has_capture": bool(caps), "has_zeolites": any(r["family"] == "zeolite" for r in rows)}
 
 
 def runs_summary(db: str) -> list[dict]:
@@ -607,12 +706,19 @@ def runs_summary(db: str) -> list[dict]:
             "SELECT tier, COUNT(DISTINCT structure) FROM evaluations WHERE run_id=? AND status='ok' "
             "GROUP BY tier", (rid,))}
         est = _estimates(con, rid)
-        best = lambda tier: max((e for e in est.values() if e.tier == tier),  # noqa: E731
+        best = lambda tier: max((e for e in est.values() if e.tier == tier and "_dres" not in e.structure),  # noqa: E731
                                 key=lambda e: e.uptake, default=None)
         pack = lambda e: ({"structure": e.structure, "uptake": round(e.uptake, 4),  # noqa: E731
                            "err": round(e.err, 4)} if e else None)
+        cfg = json.loads((con.execute("SELECT config_json FROM runs WHERE run_id=?", (rid,)).fetchone() or ["{}"])[0] or "{}")
+        rec = con.execute("SELECT payload_json FROM events WHERE run_id=? AND type='recommend' ORDER BY event_id DESC "
+                          "LIMIT 1", (rid,)).fetchone()
         out.append({**r, "spent_cpu_s": round(spent, 1), "n_t1": counts.get(1, 0),
-                    "n_t2": counts.get(2, 0), "best_t1": pack(best(1)), "best_t2": pack(best(2))})
+                    "n_t2": counts.get(2, 0), "n_t3": counts.get(3, 0), "best_t1": pack(best(1)), "best_t2": pack(best(2)),
+                    "objective": cfg.get("objective", "uptake"),
+                    "pool": "mixed" if str(cfg.get("pool", "")).startswith("mixed") else
+                    "arena" if cfg.get("pool") == "arena" else "mof",
+                    "recommended": json.loads(rec[0]) if rec else None})
     return out
 
 
@@ -622,7 +728,7 @@ def measurements(db: str, name: str) -> list[dict]:
     return [dict(r) for r in con.execute(
         "SELECT e.run_id, r.arm, e.tier, ROUND(e.uptake_molkg, 4) AS uptake, ROUND(e.uptake_err, 4) AS err, "
         "ROUND(e.cpu_s, 1) AS cpu_s, e.mode, e.finished_at FROM evaluations e JOIN runs r USING (run_id) "
-        "WHERE e.structure=? AND e.tier>0 AND e.status='ok' ORDER BY e.tier DESC, e.finished_at", (name,))]
+        "WHERE e.structure=? AND e.tier IN (1, 2) AND e.status='ok' ORDER BY e.tier DESC, e.finished_at", (name,))]
 
 
 def events_after(db: str, run_id: str, after: int, T: float, limit: int = 500) -> list[dict]:

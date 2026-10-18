@@ -21,6 +21,7 @@ const WORKER_Y = 530, POOL = { x0: 40, x1: 320, y0: 395, y1: 480 };
 const SLOTS = { orchestrator: { x: 565, y: 18, w: 330, h: 104 }, scout: { x: 14, y: 300, w: 290, h: 84 },
   allocator: { x: 690, y: 300, w: 300, h: 104 }, critic: { x: 360, y: 395, w: 290, h: 86 } };
 const S = { sats: {}, satCount: {}, bubbles: {}, run: null, speed: 1, workers: {}, nodes: {}, edges: {}, best: -1, measured: {}, vetoed: {}, rounds: {}, curRound: null,
+  capture: {}, checks: {}, flags: {}, families: null, phase: null, rec: null, lastText: {},
   queue: [], busy: false, poolPts: [], poolByName: {}, live: false, lastToast: 0 };
 
 // ------------------------------------------------------------------------------------ stage
@@ -183,6 +184,7 @@ function act(e, animate) {
   const sub = e.agent && e.agent.includes("/") ? e.agent : null;
   if (sub) {
     const parentId = e.parent || sub.split("/").slice(0, -1).join("/");
+    if (sub.startsWith("scout/") && e.type === "agent_start") (S.subFams = S.subFams || new Set()).add(sub.split("/")[1]);
     switch (e.type) {
       case "agent_start": setSat(sub, "working"); if (animate) fly(parentId, sub, "task", 450); break;
       case "agent_finish": setSat(sub, "idle"); if (animate) fly(sub, parentId, "answer", 450); chat(e); break;
@@ -207,6 +209,7 @@ function act(e, animate) {
       break;
     case "agent_finish":
       setNode(role, "idle");
+      S.lastText[role] = p.text || "";
       if (animate) { if (role !== "orchestrator") { fly(role, "orchestrator", "answer"); flash(role); } bubble(role, p.text || "done"); }
       chat(e);
       break;
@@ -233,6 +236,11 @@ function act(e, animate) {
       break;
     case "task_done": {
       setWorker(e.agent, "", "");
+      if (p.tier === 3) {  // capture check: APS, not an uptake
+        S.capture[p.structure] = p;
+        if (animate) { flash("results"); fly(e.agent, "critic", "result", 700); }
+        break;
+      }
       const isNew = !(p.structure in S.measured);
       S.measured[p.structure] = [p.uptake, p.err, p.tier];
       if (isNew) markPool(p.structure, animate);
@@ -254,8 +262,20 @@ function act(e, animate) {
       break;
     case "recommend":
       setNode("orchestrator", "recovered");
-      if (animate) { burst(NODES.orchestrator.x, NODES.orchestrator.y, "#1E9B62"); toast(`Recommended: <b>${esc(name(p.structure))}</b> ${f3(p.uptake)} mol/kg · tier-2 confirmed`); bubble("orchestrator", p.text || "recommendation made"); }
+      S.rec = p;
+      if (animate) { burst(NODES.orchestrator.x, NODES.orchestrator.y, "#1E9B62"); toast(p.aps != null ? `Recommended: <b>${esc(name(p.structure))}</b> APS ${f3(p.aps)} mol/kg · capture-checked` : `Recommended: <b>${esc(name(p.structure))}</b> ${f3(p.uptake)} mol/kg · tier-2 confirmed`); bubble("orchestrator", p.text || "recommendation made"); }
       chat(e);
+      break;
+    case "phase": S.phase = p; break;
+    case "capture_required": case "disorder_check_required": case "disorder_artifact": case "disorder_passed":
+      S.checks[e.type] = (S.checks[e.type] || 0) + 1;
+      if (e.type === "disorder_artifact") S.vetoed[p.structure] = p.text || "disorder artifact";
+      if (animate) bubble("critic", p.text || e.type.replace(/_/g, " "), e.type === "disorder_passed" ? "" : "veto");
+      chat(e);
+      break;
+    case "decision":
+      if (p.families) S.families = p.families;
+      if (e.agent === "allocator" && p.kind === "random_slice") S.randomSlice = (S.randomSlice || 0) + (p.n || 0);
       break;
     case "round_start":
       S.curRound = p.round; S.rounds[p.round] = S.rounds[p.round] || { round: p.round }; Object.assign(S.rounds[p.round], { n: p.n, split: p.split || p.phase });
@@ -311,13 +331,17 @@ function chat(e) {
 // ------------------------------------------------------------------------------ board, rounds
 let boardKeys = "";
 function renderBoard() {
-  const top = Object.entries(S.measured).sort((a, b) => b[1][0] - a[1][0]).slice(0, 10);
-  const key = top.map(([s, m]) => s + m[2] + (S.vetoed[s] ? "v" : "")).join();
+  const top = Object.entries(S.measured).filter(([s]) => !/_dres/.test(s)).sort((a, b) => b[1][0] - a[1][0]).slice(0, 10);
+  const key = top.map(([s, m]) => s + m[2] + (S.vetoed[s] ? "v" : "") + (S.capture[s] ? "c" : "") + ((S.flags[s] || {}).dis ? "d" : "")).join();
   if (key === boardKeys) return;
   const prev = new Set(boardKeys.split(",")); boardKeys = key;
   $("board").innerHTML = top.map(([s, m], i) => {
-    const tag = m[2] === 2 ? `<span class="tag ok">CONFIRMED</span>` : S.vetoed[s] ? `<span class="tag veto">VETOED</span>` : `<span class="tag">tier 1</span>`;
-    return `<li class="${prev.has(s + m[2] + (S.vetoed[s] ? "v" : "")) ? "" : "new"}"><span class="n">${i + 1}</span><span class="s" title="${esc(s)}">${esc(name(s))}</span><span class="u">${f3(m[0])}</span>${tag}</li>`;
+    const c = S.capture[s] || S.capture[s.replace(/_clean$/, "_dres_clean")];
+    const tag = S.vetoed[s] ? `<span class="tag veto">VETOED</span>` : c ? `<span class="tag t3" title="capture check: S ${c.S == null ? "–" : (+c.S).toFixed(1)}, ΔN ${f3(c.dn)} mol/kg">APS ${f3(c.aps)}</span>`
+      : m[2] === 2 ? `<span class="tag ok">CONFIRMED</span>` : `<span class="tag">tier 1</span>`;
+    const fl = S.flags[s] || {};
+    const badges = (window.Shell ? Shell.fam(s) + Shell.dis(fl.dis) : "");
+    return `<li class="${prev.has(s + m[2] + (S.vetoed[s] ? "v" : "")) ? "" : "new"}"><span class="n">${i + 1}</span><span class="s" title="${esc(s)}">${esc(name(s))} ${badges}</span><span class="u">${f3(m[0])}</span>${tag}</li>`;
   }).join("") || `<li class="empty">Nothing measured yet.</li>`;
 }
 function renderRounds() {
@@ -346,7 +370,58 @@ function frame(f) {
   $("a-split").textContent = sp.map((s) => `${(s.model || "").includes("Nano") ? "Nano" : "Super"} ${((s.tokens || 0) / 1000).toFixed(1)}k${s.usd ? ` $${s.usd.toFixed(2)}` : ""}`).join(" · ");
   $("a-round").textContent = S.curRound ?? "–";
   layoutWorkers((f.workers || []).map((w) => w.worker_id));
-  $("stage-note").textContent = f.run.arm === "sieve" ? `· ${f.run.finished ? "finished" : "live"}` : `· "${f.run.arm}" is a fixed-policy baseline — no agents`;
+  $("stage-note").textContent = (f.run.arm || "").startsWith("sieve") ? `· ${f.run.finished ? "finished" : "live"}` : `· "${f.run.arm}" is a fixed-policy baseline — no agents`;
+  S.flags = f.flags || {};
+  for (const [k, c] of Object.entries(f.capture || {})) S.capture[k] = S.capture[k] || c;
+  renderFlow(f);
+  renderBoard();
+}
+
+// ------------------------------------------------------------------------- flow strip
+// One lane per kind of agent work, left to right in the order a round runs, with live counts;
+// the lane whose agent is working now is outlined, and the phase stepper shows where the run is.
+function renderFlow(f) {
+  const fl = f.flow || {}, j = fl.jobs || {}, cap = f.objective === "capture", agentic = (f.run.arm || "").startsWith("sieve");
+  const phases = [["explore", "1 · explore T1"], ["confirm", "2 · confirm T2"], ["capture", "3 · capture check T3"], ["final", "final checks"], ["done", "recommend"]];
+  const cur = f.run.finished ? "done" : (S.phase || f.phase || {}).phase || (agentic ? "explore" : null);
+  const order = phases.map((p) => p[0]);
+  $("phases").innerHTML = phases.map(([k, label]) => {
+    const off = (k === "capture" && !cap) || (k === "final" && !cap && !f.disorder_check);
+    const cls = off ? "off" : k === cur ? `now${k === "capture" ? " t3" : ""}` : order.indexOf(k) < order.indexOf(cur) ? "done" : "";
+    return `<li class="${cls}"${off ? ` title="not used by this run (${k === "capture" ? "objective: uptake" : "no finalist checks"})"` : ""}>${label}</li>`;
+  }).join("");
+  $("flow-note").textContent = `· objective: ${cap ? "flue-gas capture (APS)" : "1-bar uptake"} · pool: ${f.pool === "mixed" ? "MOFs + zeolites" : "CoRE MOFs"}`;
+  $("flow-more").href = `/how?run=${encodeURIComponent(f.run.run_id)}`;
+  const st = {};
+  for (const a of f.agents || []) { const r = (a.agent_id || "").split("/")[0]; if (a.state === "working" || !st[r]) st[r] = a.state; }
+  const run = (f.workers || []).filter((w) => w.state === "running");
+  const byT = (t) => run.filter((w) => w.tier === t).length;
+  const T = (t, n) => (n ? `${Shell.tier(t)} ${n}` : "");
+  const famN = S.families ? Object.values(S.families) : null;
+  const sf = [...(S.subFams || [])], fz = sf.filter((x) => x.startsWith("z")).length;
+  const famTxt = famN ? `${famN.filter((x) => x.class !== "zeolite").length} MOF${famN.some((x) => x.class === "zeolite") ? ` + ${famN.filter((x) => x.class === "zeolite").length} zeolite` : ""} families`
+    : sf.length ? `${sf.length - fz} MOF${fz ? ` + ${fz} zeolite` : ""} families scouted` : "families not scouted yet";
+  const caps = Object.entries(S.capture).sort((a, b) => (b[1].aps ?? -1e9) - (a[1].aps ?? -1e9));
+  const ck = S.checks, rec = S.rec;
+  const lanes = [
+    ["orchestrator", "Orchestrator", `round ${S.curRound ?? "–"} · phase ${cur || "–"}`, esc((S.lastText.orchestrator || "plans the budget split").replace(/^round \d+ — /, "").slice(0, 140))],
+    ["scout", "Scout", famTxt, S.families ? Object.entries(S.families).sort((a, b) => b[1].promise - a[1].promise).slice(0, 4)
+      .map(([k, v]) => `${k}${v.class === "zeolite" ? "ᶻ" : ""} ${(+v.promise).toFixed(2)}`).join(" · ") : ""],
+    ["allocator", "Allocator", `queued: ${[T(1, j[1]?.queued), T(2, j[2]?.queued), T(3, j[3]?.queued)].filter(Boolean).join(" ") || "none"}`,
+      `random slice ${fl.random_slice || 0}${fl.disorder_jobs ? ` · disorder re-measures ${fl.disorder_jobs}` : ""}`],
+    ["workers", "Workers", run.length ? `running: ${[T(1, byT(1)), T(2, byT(2)), T(3, byT(3))].filter(Boolean).join(" ")}` : "idle",
+      `done ${Shell.tier(1)} ${j[1]?.done || 0} ${Shell.tier(2)} ${j[2]?.done || 0}${cap || j[3]?.done ? ` ${Shell.tier(3)} ${j[3]?.done || 0}` : ""}`],
+    ["critic", "Critic", `vetoes ${fl.vetoes || 0}${cap ? ` · needs T3 ${fl.capture_required || 0}` : ""}`,
+      f.disorder_check ? `disorder checks ${fl.disorder_required || 0} · passed ${fl.disorder_passed || 0} · artifacts ${fl.disorder_artifacts || 0}` : "no disorder check in this run"],
+    ["recommend", "Recommend", rec ? `${esc(name(rec.structure))}` : "not yet",
+      rec ? (rec.aps != null ? `APS ${f3(rec.aps)} · S ${(+rec.S).toFixed(1)} · ΔN ${f3(rec.dn)}` : `${f3(rec.uptake)} mol/kg, tier ${rec.tier}`)
+        : cap ? (caps.length ? `best APS so far ${f3(caps[0][1].aps)} (${esc(name(caps[0][0]))})` : "needs T2 + a T3 capture check") : "needs tier-2 confirmation"],
+  ];
+  $("lanes").innerHTML = lanes.map(([k, label, a, b]) => {
+    const state = k === "workers" ? (run.length ? "working" : "idle") : k === "recommend" ? (rec ? "done" : "") : st[k] || "";
+    return `<li class="${state}"><div class="lh">${label}<span class="st">${state === "working" ? "working" : state === "failed" ? "fell back" : state === "recovered" ? "rule-based" : ""}</span></div>
+      <div class="lb">${a}</div><div class="lb dim">${b}</div></li>`;
+  }).join("");
 }
 
 // ----------------------------------------------------------------------------------- boot
@@ -354,7 +429,7 @@ async function boot() {
   const cfg = await fetch("/api/config").then((r) => r.json());
   S.speed = cfg.speed || 1;
   $("replay").hidden = !cfg.replay;
-  const sieveRuns = cfg.runs.filter((r) => r.arm === "sieve");
+  const sieveRuns = cfg.runs.filter((r) => (r.arm || "").startsWith("sieve"));
   const want = params.get("run") || cfg.replay || (sieveRuns[0] || cfg.runs[0] || {}).run_id;
   const sel = $("run-select");
   for (const r of cfg.runs) sel.appendChild(new Option(`${r.run_id} · ${r.arm}`, r.run_id, false, r.run_id === want));

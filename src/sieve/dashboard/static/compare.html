@@ -60,7 +60,7 @@
       <div><h4>Why it isn't a result yet</h4><ul>
         <li><b>Model ≠ lab.</b> Without framework charges, Mg-MOF-74 comes out at 1.7 here against ~8 measured. Only the same-model table is a fair comparison.</li>
         <li><b>Broken crystal file.</b> All 32 of ZADREE's N atoms sit 0.45 Å from an O atom, exactly at the Cu pockets where CO₂ binds. 4 of the 5 top leads are disordered.</li>
-        <li><b>Pore blocking</b> is still being added, and the frameworks are rigid with <b>no water</b>, which is what kills most MOFs and 13X in practice.</li>
+        <li><b>Pore blocking</b> (CO₂-inaccessible pockets closed off) is now applied on the Science page; full-run screening uses it only when a run opts in, so the screens above did not. The frameworks are rigid with <b>no water</b>, which is what kills most MOFs and 13X in practice.</li>
         <li>ZADREE is a <b>published compound</b> (CSD refcode): its paper may already report CO₂ data.</li></ul></div>
       <div><h4>Why it matters anyway</h4><p>MEA's regeneration can take a quarter to a third of a power plant's output, and 13X needs dry gas. Solid sorbents could beat both, but the bottleneck is <b>search</b>: 12,000+ known MOFs, weeks per lab test, ~220 CPU-h to simulate them all even cheaply. SIEVE turns 4 CPU-h into a <b>verified shortlist for chemists</b>, with every claim re-measured, peer-reviewed and checked for artefacts. That is the contribution. A material is a discovery only once a lab measures it.</p></div>
     </div>
@@ -147,9 +147,15 @@ async function boot() {
 function renderRuns(runs) {
   const top = Math.max(...runs.map((r) => (r.best_t2 ? r.best_t2.uptake : -1)));
   const b = (x, t) => (x ? `<span class="tier t${t}">T${t}</span> ${fx(x.uptake)} <span class="pm">± ${fx(x.err)}</span><br><a href="/science?name=${encodeURIComponent(x.structure)}">${esc(short(x.structure))}</a>` : "–");
-  $("runs").innerHTML = `<thead><tr><th>run</th><th>arm</th><th>status</th><th class="n">CPU-h spent</th><th class="n">measured T1 / T2</th><th class="n">best confirmed</th><th class="n">best unconfirmed</th></tr></thead><tbody>`
-    + runs.map((r) => `<tr class="${r.arm === "sieve" ? "me" : ""}"><td class="mono"><a href="/discoveries?run=${encodeURIComponent(r.run_id)}">${esc(r.run_id)}</a></td><td>${esc(r.arm)}</td><td>${esc(r.status)}</td>
-      <td class="n">${fx(r.spent_cpu_s / 3600)}${r.budget_cpu_s < 3.6e6 ? ` / ${fx(r.budget_cpu_s / 3600)}` : " <span class=\"dim\">(no cap)</span>"}</td><td class="n">${r.n_t1} / ${r.n_t2}</td>
+  // objective: what the run ranks by (1-bar uptake, or flue-gas capture APS among capture-checked
+  // finalists); runs with different objectives answer different questions and are not ranked together
+  const obj = (r) => r.objective === "capture"
+    ? `<span class="tier t3" title="capture objective: finalists ranked by APS = S(CO2/N2) x dN from a tier-3 capture check">capture</span>${r.recommended && r.recommended.aps != null ? `<br><span class="dim">APS ${fx(r.recommended.aps)}</span>` : ""}`
+    : `<span class="dim">uptake</span>`;
+  const anyT3 = runs.some((r) => r.n_t3);
+  $("runs").innerHTML = `<thead><tr><th>run</th><th>arm</th><th>objective</th><th>status</th><th class="n">CPU-h spent</th><th class="n">measured T1 / T2${anyT3 ? " / T3" : ""}</th><th class="n">best confirmed</th><th class="n">best unconfirmed</th></tr></thead><tbody>`
+    + runs.map((r) => `<tr class="${(r.arm || "").startsWith("sieve") ? "me" : ""}"><td class="mono"><a href="/discoveries?run=${encodeURIComponent(r.run_id)}">${esc(r.run_id)}</a></td><td>${esc(r.arm)}${r.pool === "mixed" ? ' <span class="fam" title="pool: CoRE MOFs + IZA zeolites">+zeolites</span>' : ""}</td><td>${obj(r)}</td><td>${esc(r.status)}</td>
+      <td class="n">${fx(r.spent_cpu_s / 3600)}${r.budget_cpu_s < 3.6e6 ? ` / ${fx(r.budget_cpu_s / 3600)}` : " <span class=\"dim\">(no cap)</span>"}</td><td class="n">${r.n_t1} / ${r.n_t2}${anyT3 ? ` / ${r.n_t3 || 0}` : ""}</td>
       <td class="n ${r.best_t2 && r.best_t2.uptake === top ? "best" : ""}">${b(r.best_t2, 2)}</td><td class="n">${b(r.best_t1, 1)}</td></tr>`).join("") + `</tbody>`;
 }
 

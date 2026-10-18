@@ -156,3 +156,8 @@
   .events li .who, .events li .verb { display: none; }
   .agent-rows li { grid-template-columns: 12px 90px minmax(0, 1fr); }
 }
+
+/* tier 3 (capture check) and the disorder re-measure in the worker strip; zeolites in the scatter */
+.job .sid .st.t3 { color: var(--violet); font-weight: 600; }
+.job.running:has(.st.t3) .sbar i { background: var(--violet); }
+#p-legend .dot.dia { border-radius: 0; transform: rotate(45deg) scale(0.8); }

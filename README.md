@@ -43,6 +43,7 @@ uv run python -m sieve.referee data/runs.db data/bench/modes.db
 | 0 | pymatgen parse, P1 CIF, descriptors + CoRE Zeo++ table | median 24 ms, 15 CPU-min for all 12,020 |
 | 1 | GCMC 500 + 100 cycles | median ~27 s; 18 s to 150 s+ |
 | 2 | GCMC 2000 + 400 cycles | median ~58 s with a cached grid, ~120 s direct |
+| 3 | capture check (objective `capture` only): 15:85 CO2/N2 mixture at 1 bar + pure CO2 at 0.01 bar, 500 + 200 cycles each | Cu-BTC: 35 CPU-s (estimate 36 s) |
 
 Cost is not a function of atom count alone. RASPA does max(20, N) moves per cycle, so a structure
 that adsorbs a lot costs more to simulate: cost depends on the quantity being measured. The cost
@@ -55,6 +56,35 @@ O(grid points x framework atoms) to build, then makes MC nearly independent of f
 and is reused when a structure is promoted from tier 1 to tier 2. `Oracle.plan()` picks the cheaper.
 On 9 paired measurements grid and direct agree within reported error (tier-2 differences +1.8%,
 +4.8%, +0.8%, -1.6%); a cached grid makes tier 2 2-4x cheaper.
+
+## Objectives, pools and finalist checks
+
+All three are run-config options (stored in `runs.config_json`, restored by `resume`); the defaults
+leave every earlier run, arm and benchmark exactly as it was.
+
+- **Objective** (`--objective uptake|capture`). `capture` keeps tiers 1-2 as the screen, then ranks
+  finalists by a tier-3 capture check (`sieve/capture.py`): APS = S(CO2/N2) x dN_mix, with S from a
+  15:85 CO2/N2 binary GCMC at 1 bar and dN_mix = mixture CO2 loading - pure-CO2 loading at 0.01 bar
+  (vacuum swing). APS as selectivity x working capacity follows Chung et al., *Sci. Adv.* 2, e1600909
+  (2016). A tier-3 row is one budgeted evaluation (two RASPA calls, heartbeats, CPU limit, `lost` on a
+  crash) with `uptake_molkg` NULL, so 1-bar rankings ignore it; the ledger counts it. Agents: phases
+  explore (to 60% of budget) -> confirm (to 80%) -> capture; the orchestrator holds back what the final
+  checks will cost; the allocator may schedule tier 3 only on tier-2-confirmed leaders; the critic
+  requires it; `recommend` ranks by APS among capture-checked structures and names nothing otherwise.
+  Baselines (`baseline ... --objective capture`) hold back the same funnel's cost and end with the same
+  check of their own top 3 (tier 2 first where missing), recommending the best APS. No replay model.
+- **Pool** (`--pool mof|mixed`). `mixed` adds the IZA-SC zeolites (pure silica, no cations). Their
+  PLD/LCD/void fraction/surface area come from `sieve/porosity.py` (grid method, CoRE's definitions and
+  CCDC radii; Zeo++ is not installed). On 20 CoRE MOFs vs CoRE's Zeo++ values: LCD mean |diff| 0.04 A,
+  PLD -0.09 A (one-signed, calibrated out), void fraction 0.005, surface area 29% low (ranking feature
+  only). The world gives material class a feature column and its own z-families; prompts say the model
+  is fair to zeolites only geometrically. `--limit N` samples the pool once (family-stratified) and stores
+  the sample, so a resume screens the same structures.
+- **Disorder check** (on for new real runs, off for replay seeds and older runs). A finalist whose CIF
+  has atoms closer than any bond (`sieve/disorder.py`) is re-measured at tier 2 on its resolved CIF
+  (`<stem>_dres_clean`) before it can be recommended; the recommendation uses the resolved value, and a
+  drop of more than 15% is a `disorder_artifact` that vetoes the original (`sieve/agents/checks.py`).
+  `python -m sieve.referee <db> --disorder` reports raw and resolved referee values of every arm's winner.
 
 ## Fault tolerance
 

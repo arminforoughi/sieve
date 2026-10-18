@@ -28,10 +28,11 @@
     <div class="lb-filters">
       <input type="search" id="filter" placeholder="Filter by name or metal…" aria-label="Filter leaderboard">
       <label><input type="checkbox" id="only-t2"> tier-2 confirmed only</label>
+      <label id="fam-wrap" hidden>family <select id="fam" aria-label="Material family"><option value="">all</option><option value="MOF">MOF</option><option value="zeolite">zeolite</option></select></label>
       <span class="note" id="lb-count"></span>
     </div>
     <div class="tbl-wrap lb-wrap"><table class="t lb" id="lb"></table></div>
-    <p class="note legend-note"><span class="tier t2">T2</span> confirmed (400 + 2000 cycles); only T2 can name a winner. <span class="tier t1">T1</span> screening (100 + 500 cycles, not converged, ±18%): rank only. CO₂ uptake at 298 K and 1 bar, mol/kg ± 1σ, no framework charges. <a href="/guide">Methods</a></p>
+    <p class="note legend-note"><span class="tier t2">T2</span> confirmed (400 + 2000 cycles); only T2 can name a winner. <span class="tier t1">T1</span> screening (100 + 500 cycles, not converged, ±18%): rank only. CO₂ uptake at 298 K and 1 bar, mol/kg ± 1σ, no framework charges. <span class="tier t3">T3</span> capture check, runs with the capture objective: APS = S(CO₂/N₂) × ΔN from a 15:85 CO₂/N₂ mixture at 1 bar and pure CO₂ at 0.01 bar. <span class="fam">zeolite</span> IZA pure-silica framework; <span class="dis">disordered</span> CIF with atoms closer than any bond. <a href="/guide">Methods</a></p>
   </section>
 
   <section aria-label="Top structures">

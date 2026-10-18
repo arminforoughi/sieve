@@ -17,6 +17,10 @@
   --green-soft: rgba(30, 138, 88, 0.10);
   --amber: #A86F00;
   --amber-soft: rgba(196, 135, 0, 0.10);
+  --violet: #6A4FB6;
+  --violet-soft: rgba(106, 79, 182, 0.10);
+  --blue: #2F68A8;
+  --blue-soft: rgba(47, 104, 168, 0.08);
   --sans: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --shell-h: 52px;
@@ -105,6 +109,13 @@ select:focus-visible, input:focus-visible, button:focus-visible, a:focus-visible
 .tier.t1 { color: var(--amber); border-color: var(--amber); background: var(--amber-soft); }
 .tier.t2 { color: #fff; border-color: var(--green); background: var(--green); }
 .tier.t0 { color: var(--ink-3); border-color: var(--border); }
+.tier.t3 { color: #fff; border-color: var(--violet); background: var(--violet); }  /* capture check */
+/* material family and disorder flags, wherever structures are listed */
+.fam { display: inline-block; font: 600 9.5px var(--mono); letter-spacing: 0.05em; padding: 0 5px; border-radius: 3px;
+  border: 1px solid var(--blue); color: var(--blue); background: var(--blue-soft); white-space: nowrap; vertical-align: 1px; text-transform: uppercase; }
+.fam.mof { border-color: var(--border); color: var(--ink-3); background: none; }
+.dis { display: inline-block; font: 600 9.5px var(--mono); letter-spacing: 0.05em; padding: 0 5px; border-radius: 3px;
+  border: 1px dashed var(--red); color: var(--red); white-space: nowrap; vertical-align: 1px; text-transform: uppercase; }
 .chip { font: 600 11px var(--mono); letter-spacing: 0.04em; padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border);
   color: var(--ink-2); vertical-align: middle; white-space: nowrap; }
 .chip:empty { display: none; }
