@@ -29,6 +29,82 @@
     <ol class="wf-steps wf-verify" id="wf-verify"></ol>
   </section>
 
+  <section class="card" aria-label="Scientist and agents">
+    <h2>3 · Who does what <span class="sub">the usual computational-screening workflow, and which part SIEVE's agents take over</span></h2>
+    <div class="tbl-wrap"><table class="t wf-who-tbl">
+      <thead><tr><th>Task</th><th>A computational scientist, by hand</th><th>SIEVE</th></tr></thead>
+      <tbody>
+        <tr><td>Choose candidates</td><td>Shortlists familiar frameworks from the literature, or ranks by one descriptor such as surface area.</td><td><b>Scout</b> splits all 8,803 into families; a <b>sub-scout</b> per family sets its own search rule and rates its promise from the data so far.</td></tr>
+        <tr><td>Decide how carefully to simulate</td><td>Picks one fidelity for everything, or runs a cheap screen and then long runs on a hand-picked few.</td><td><b>Allocator</b> chooses structure and tier for every job, round by round, within the budget; the <b>orchestrator</b> keeps a reserve to confirm the winner.</td></tr>
+        <tr><td>Run and babysit jobs</td><td>Writes scripts, queues jobs, restarts the ones that crash or hang.</td><td><b>Workers</b> with CPU-time limits and heartbeats; timeouts are expected; <code>resume</code> continues after a crash.</td></tr>
+        <tr><td>Decide whether a result is real</td><td>Eyeballs error bars, re-runs the suspicious ones if there is time.</td><td><b>Critic</b> and a <b>sub-critic</b> per contested leader veto unconfirmed claims; a <b>referee</b> re-measures every arm's top 10; the <b>disorder check</b> catches broken crystal files.</td></tr>
+        <tr><td>Explain why it works</td><td>Writes the discussion section.</td><td><b>Analyst</b> drafts it; a recursive <b>peer reviewer</b> checks every sentence against the numbers.</td></tr>
+      </tbody>
+    </table></div>
+    <div class="wf-human">
+      <h3>What stays with the scientist</h3>
+      <ul>
+        <li><b>The model.</b> Force field, charges or none, rigid framework, temperature, pressure: the agents optimise <i>within</i> it, never question it.</li>
+        <li><b>The question.</b> Uptake at 1 bar or a flue-gas capture score; the budget; which pool.</li>
+        <li><b>Reading the caveats.</b> No charges, no water, disorder, pore blocking: the tool flags them, a person decides what they mean.</li>
+        <li><b>The literature and the lab.</b> Looking up a lead in the CSD and its paper, then making and measuring it.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="card" aria-label="Recursive agents">
+    <h2>4 · Agents that spawn agents <span class="sub">three places where an agent splits its job and hands the parts to children</span></h2>
+    <div class="wf-trees">
+      <div class="wf-tree">
+        <h3>Scout</h3>
+        <ul class="tree">
+          <li><span class="node">Scout <small>picks families to study</small></span>
+            <ul>
+              <li><span class="node sub">sub-scout · family f1 <small>search rule + promise</small></span>
+                <ul><li><span class="node subsub">sub-sub-scout · f1a</span></li><li><span class="node subsub">sub-sub-scout · f1b</span></li></ul></li>
+              <li><span class="node sub">sub-scout · family f2</span></li>
+              <li><span class="node sub">sub-scout · family f3 …</span></li>
+            </ul></li>
+        </ul>
+        <p>If a sub-scout finds its family is really two kinds of structure, it splits the family and hands each half to a child.</p>
+        <div class="wf-count" id="rc-scout"></div>
+      </div>
+      <div class="wf-tree">
+        <h3>Critic</h3>
+        <ul class="tree">
+          <li><span class="node">Critic <small>audits the ranking</small></span>
+            <ul>
+              <li><span class="node sub">sub-critic · leader 1 <small>credible? confirm?</small></span></li>
+              <li><span class="node sub">sub-critic · leader 2</span></li>
+              <li><span class="node sub">sub-critic · leader 3</span></li>
+            </ul></li>
+        </ul>
+        <p>Each contested leader gets its own examiner, which compares it with what similar structures measured. The critic rules with their verdicts in hand.</p>
+        <div class="wf-count" id="rc-critic"></div>
+      </div>
+      <div class="wf-tree">
+        <h3>Peer reviewer</h3>
+        <ul class="tree">
+          <li><span class="node">Lead reviewer <small>collects every claim</small></span>
+            <ul>
+              <li><span class="node sub">sub-reviewer · claim 1 <small>supported?</small></span></li>
+              <li><span class="node sub">sub-reviewer · claim 2 <small>compound: split</small></span>
+                <ul><li><span class="node subsub">part a</span></li><li><span class="node subsub">part b</span></li></ul></li>
+              <li><span class="node sub">sub-reviewer · claim 3 …</span></li>
+            </ul></li>
+        </ul>
+        <p>A claim joining two assertions ("X holds a lot <i>because</i> of Y") is split, and each part is judged on its own. Verdicts roll up in code, not by vote.</p>
+        <div class="wf-count" id="rc-review"></div>
+      </div>
+    </div>
+    <ul class="wf-rules wf-rec-rules">
+      <li><b>Bounded.</b> At most two levels below any agent (depth ≤ 2), so a run can never spawn without limit.</li>
+      <li><b>Parallel.</b> Siblings run at the same time; the parent waits for all of them, then decides.</li>
+      <li><b>Cheap children.</b> Children use a smaller model where that is enough; the parent keeps the big one.</li>
+      <li><b>Never stuck.</b> If a child's model call fails, a rule-based fallback answers, and the event log says so.</li>
+    </ul>
+  </section>
+
   <section class="card" aria-label="Rules">
     <h2>The rules that keep it honest</h2>
     <ul class="wf-rules">

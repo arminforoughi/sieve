@@ -77,9 +77,31 @@
     ].join("");
   }
 
+  function recursion(R) {
+    if (!R || R.error) return;
+    const sum = (o) => Object.values(o || {}).reduce((a, x) => ({ spawns: a.spawns + x.spawns, children: a.children + x.children }), { spawns: 0, children: 0 });
+    const lvl = (o, d) => (o && o[d]) || { spawns: 0, children: 0 };
+    const rows = (role, kid, grand) => {
+      const here = (R.this_run || {})[role], all = (R.benchmark || {})[role];
+      const out = [];
+      if (here) out.push(`this run: <b>${n(sum(here).children)}</b>${kid} spawned`);
+      if (all) {
+        out.push(`benchmark (${n(R.benchmark_runs)} agent runs): <b>${n(lvl(all, "1").children)}</b>${kid}`
+          + (grand ? `, <b>${n(lvl(all, "2").children)}</b>${grand}` : ""));
+        if (grand && !lvl(all, "2").children) out.push(`<span class="dim">no family was mixed enough to split yet (needs ≥ 300 structures)</span>`);
+      } else if (R.benchmark === null) out.push('<span class="dim">benchmark counts loading…</span>');
+      return out.map((r) => `<span class="row">${r}</span>`).join("") || '<span class="dim">no delegation recorded for this run</span>';
+    };
+    $("rc-scout").innerHTML = rows("scout", "sub-scouts", "sub-sub-scouts");
+    $("rc-critic").innerHTML = rows("critic", "sub-critics");
+    const rv = R.review || {}, all = rv.reviewer || Object.values(rv)[0];
+    $("rc-review").innerHTML = all ? `<span class="row"><b>${n(lvl(all, "1").children)}</b>sub-reviewers · <b>${n(lvl(all, "2").children)}</b>sub-sub-reviewers</span><span class="row">over ${n(lvl(all, "1").spawns)} reviewed structures</span>`
+      : '<span class="dim">no reviews yet</span>';
+  }
+
   function load() {
     const run = (window.Shell && Shell.run) || "";
-    fetch("/api/workflow" + (run ? `?run=${encodeURIComponent(run)}` : "")).then((r) => r.json()).then(render)
+    fetch("/api/workflow" + (run ? `?run=${encodeURIComponent(run)}` : "")).then((r) => r.json()).then((d) => { render(d); recursion(d.recursion); })
       .catch((e) => { $("wf-run").innerHTML = `<span class="callout bad">Could not load: ${e}</span>`; });
   }
 

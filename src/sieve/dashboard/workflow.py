@@ -8,7 +8,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
+import time
 from pathlib import Path
+
+_CACHE: dict[str, tuple[float, dict]] = {}
+_BUSY: set[str] = set()
+_TTL_S = 600.0
 
 
 def _ro(db: str) -> sqlite3.Connection:
@@ -64,6 +70,50 @@ def stages(db: str, run_id: str) -> dict:
     }
 
 
+def _delegations(db: Path, run_id: str | None = None) -> dict:
+    """role -> depth -> {"spawns": delegate events, "children": agents spawned}."""
+    if not Path(db).exists():
+        return {}
+    con = _ro(str(db))
+    q = ("SELECT json_extract(payload_json,'$.role'), json_extract(payload_json,'$.depth'), COUNT(*), "
+         "SUM(json_extract(payload_json,'$.n')) FROM events WHERE type='delegate'"
+         + (" AND run_id=?" if run_id else "") + " GROUP BY 1, 2")
+    out: dict = {}
+    for role, depth, n, kids in con.execute(q, (run_id,) if run_id else ()):
+        out.setdefault(role or "?", {})[str(depth or 1)] = {"spawns": n, "children": int(kids or 0)}
+    return out
+
+
+def _cached_bg(key: str, fn) -> dict | None:
+    """The arena DB holds millions of events, so its scans run in a background thread and the page
+    shows the last result (None until the first one lands, refreshed every _TTL_S)."""
+    hit = _CACHE.get(key)
+    if (hit is None or time.time() - hit[0] > _TTL_S) and key not in _BUSY:
+        _BUSY.add(key)
+
+        def work():
+            try:
+                _CACHE[key] = (time.time(), fn())
+            finally:
+                _BUSY.discard(key)
+        threading.Thread(target=work, daemon=True).start()
+    return hit[1] if hit else None
+
+
+def recursion(db: str, run_id: str | None) -> dict:
+    """How deep the agent trees actually went: this run, all arena benchmark runs, peer reviews."""
+    from sieve.arena_eval import REPLAY_DB
+    from sieve.agents.base import MAX_DEPTH
+
+    root = Path(db).resolve().parent
+    arena_runs = (_cached_bg("arena_runs", lambda: {"n": _one(_ro(str(REPLAY_DB)), "SELECT COUNT(*) FROM runs WHERE arm LIKE 'sieve-v%'")})
+                  or {}).get("n") if Path(REPLAY_DB).exists() else 0
+    return {"max_depth": MAX_DEPTH,
+            "this_run": _delegations(Path(db), run_id) if run_id else {},
+            "benchmark": _cached_bg("arena", lambda: _delegations(Path(REPLAY_DB))), "benchmark_runs": arena_runs,
+            "review": _delegations(root / "science" / "reviews.db")}
+
+
 def workflow(db: str, run_id: str | None) -> dict:
     from sieve.dashboard import validation
     con = _ro(db)
@@ -82,4 +132,8 @@ def workflow(db: str, run_id: str | None) -> dict:
         out["verify"]["disorder"] = {"scanned": len(d), "disordered": sum(1 for r in d.values() if r.get("disordered"))}
     except Exception:  # noqa: BLE001
         pass
+    try:
+        out["recursion"] = recursion(db, run_id)
+    except Exception as e:  # noqa: BLE001
+        out["recursion"] = {"error": f"{type(e).__name__}: {e}"[:200]}
     return out
