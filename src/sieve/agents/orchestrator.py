@@ -187,8 +187,11 @@ async def final_checks(ctx: Ctx, ex, max_rounds: int = 5) -> None:
             break
         before = ctx.oracle.spent()
         ctx.round += 1
+        n3, nd = sum(j["tier"] == 3 for j in jobs), sum(j["tier"] == 2 for j in jobs)
         ctx.st.start_round(ctx.run_id, ctx.round, {"phase": "final-checks", "n": len(jobs),
-                                                   "split": ", ".join(f"{j['structure']} t{j['tier']}" for j in jobs)})
+                                                   "split": " / ".join(x for x in (f"{nd} disorder re-measure" if nd else "",
+                                                                                   f"{n3} tier 3" if n3 else "") if x),
+                                                   "jobs": [f"{j['structure']} t{j['tier']}" for j in jobs]})
         ctx.st.queue_tasks(ctx.run_id, ctx.round, [{"structure": j["structure"], "tier": j["tier"], "priority": 3.0,
                                                     "reason": j["why"]} for j in jobs])
         await wait_round(ctx, ex, ctx.round)

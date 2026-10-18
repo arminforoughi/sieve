@@ -229,7 +229,8 @@ def _capture_finale(st: Store, wp, cfg: WorkerConfig, run_id: str, arm: str) -> 
             break
         before = o.spent()
         st.start_round(run_id, round_no, {"phase": "capture-funnel", "n": len(jobs),
-                                          "split": ", ".join(f"{j['structure']} t{j['tier']}" for j in jobs)})
+                                          "split": f"{sum(j['tier'] == 2 for j in jobs)} tier 2 / {sum(j['tier'] == 3 for j in jobs)} tier 3",
+                                          "jobs": [f"{j['structure']} t{j['tier']}" for j in jobs]})
         st.queue_tasks(run_id, round_no, [{**j, "priority": 2.0 + j["tier"]} for j in jobs])
         round_no += 1
         _wait_for(st, wp, run_id, 1)

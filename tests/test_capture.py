@@ -203,3 +203,20 @@ def test_stratified_sample_keeps_zeolites():
     mof_only = [x for x in c if x.family == pool.MOF]
     import random
     assert pool.sample(mof_only, 40, 3) == random.Random(3).sample(mof_only, 40)  # unchanged for MOF pools
+
+
+def test_baseline_capture_funnel_jobs(tmp_path):
+    """Baselines under the capture objective: confirm their own top 3 at tier 2, then capture-check them."""
+    from sieve.baselines import _finale_jobs
+
+    st = Store(tmp_path / "b.db")
+    run = st.create_run("random", 1000.0, {"objective": "capture"}, run_id="b")
+    for s, u in (("A", 3.0), ("B", 2.0), ("C", 1.0), ("D", 0.5)):
+        _row(st.con, run, s, 1, u=u, e=0.1)
+    _row(st.con, run, "A", 2, u=2.9, e=0.05)
+    _row(st.con, run, "A", 3, result=_cap(4.0))
+    jobs = {(j["structure"], j["tier"]) for j in _finale_jobs(st, None, None, run)}
+    assert jobs == {("B", 2), ("C", 2)}           # A is confirmed and checked; D is not in the top 3
+    _row(st.con, run, "B", 2, u=2.1, e=0.05)
+    jobs = {(j["structure"], j["tier"]) for j in _finale_jobs(st, None, None, run)}
+    assert ("B", 3) in jobs and ("A", 3) not in jobs
