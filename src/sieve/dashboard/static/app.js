@@ -52,13 +52,14 @@ const SENTENCES = {
   task_error: (p) => `error on ${name(p.structure)}: ${short(p.error || "", 48)}`,
   budget_refused: (p) => `skipped ${name(p.structure)} — does not fit the remaining budget`,
   agent_start: (p) => p.text || `started${p.task ? ` — ${p.task}` : ""}`,
-  agent_tool: (p) => p.text || `${p.tool}(${short(JSON.stringify(p.args || {}), 40)})`,
+  agent_tool: (p) => p.text || (p.tool === "llm" ? `asks ${(p.model || "the model").split("/").pop().replace("NVIDIA-", "")}` : `${p.tool}(${short(JSON.stringify(p.args || {}), 40)})`),
   agent_finish: (p) => p.text || p.summary || "finished",
   agent_fail: (p) => `failed — ${short(p.error || "", 60)}${p.retry ? `, retry ${p.retry}` : ""}`,
   agent_restart: (p) => p.text || "restarted",
   intervention: (p) => `HUMAN: ${p.text || "manual action"}`,
   delegate: (p) => p.text || `spawning ${p.n} sub-agents`,
   agent_exit: () => "sub-agent finished",
+  discovery: (p) => `${name(p.structure)}: ${p.headline || p.text || "write-up"}`,
 };
 function sentence(e) {
   const f = SENTENCES[e.type];
@@ -73,9 +74,12 @@ const VERBS = {
   decision: ["decide", "decision"], veto: ["veto", "veto"], promote: ["promote", "decision"], recommend: ["pick", "decision"],
   agent_start: ["start", ""], agent_finish: ["finish", ""], agent_fail: ["fail", "bad"], agent_restart: ["restart", "good"],
   agent_tool: ["tool", ""], intervention: ["HUMAN", "bad"], delegate: ["spawn", "decision"], agent_exit: ["exit", ""],
+  discovery: ["write", "good"],
 };
 const FILTERS = {
-  all: (e) => e.type !== "task_start" && e.type !== "worker_start",  // starts are visible in the worker strip
+  // starts show in the worker strip; model calls and usage are bookkeeping; the analyst's finish repeats its write-up
+  all: (e) => !["task_start", "worker_start", "llm_usage"].includes(e.type) && !(e.type === "agent_tool" && (e.p || {}).tool === "llm")
+    && !(e.type === "agent_finish" && e.agent === "analyst"),
   timeouts: (e) => e.type === "timeout" || e.type === "worker_dead",
   vetoes: (e) => e.type === "veto",
   decisions: (e) => ["decision", "veto", "promote", "recommend", "round_end"].includes(e.type),
