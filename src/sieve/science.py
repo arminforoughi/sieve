@@ -10,6 +10,11 @@
   capture props CO2/N2 selectivity from 15:85 flue-gas mixture GCMC, VSA / mixture / TSA working
                 capacities, isosteric heat and Henry constants from Widom insertion
                 (compute_props; cached separately in <alias>.props.json, merged by cached()).
+  pore blocking pockets CO2 cannot reach from the gas (sodalite cages of LTA/FAU, ...) are found by
+                periodic percolation on the same probe grid (sieve/blocking.py) and excluded from
+                every GCMC/Widom run with RASPA BlockPockets, and from the pocket statistics. On by
+                default here; results from before blocking are kept as <alias>.noblock.json /
+                <alias>.props.noblock.json for the before/after comparison.
 
 All of this is visualization, run outside every budget, cached under data/science/.
 Caveat: no framework partial charges in this model, so frameworks whose CO2 affinity is
@@ -32,7 +37,7 @@ from pathlib import Path
 
 import numpy as np
 
-from sieve import forcefield
+from sieve import blocking, forcefield
 from sieve.oracle import PROJECT_ROOT, Oracle, bundled_cif_dir, describe, raspa_alias, zeolite_cif, zeolite_code
 
 SCI_DIR = PROJECT_ROOT / "data" / "science"
@@ -61,8 +66,9 @@ def _oracle(name: str) -> Oracle:
     return Oracle(SCI_DIR / "science.db", f"sci-{name}", budget_cpu_s=1e9, labels_path=None)
 
 
-def _job(desc, o: Oracle, **kw) -> dict:
-    return {"alias": desc.alias, "cif_path": desc.prepared_path, "elements": desc.elements,
+def _job(desc, o: Oracle, block: Path | None = None, **kw) -> dict:
+    extra = {"block_file": str(block)} if block else {}
+    return {**extra, "alias": desc.alias, "cif_path": desc.prepared_path, "elements": desc.elements,
             "unit_cells": list(desc.unit_cells), "forcefield": forcefield.NAME,
             "grid_types": list(forcefield.GRID_TYPES), "spacing": 0.5, "molecule": "CO2",
             "temperature": 298.0, "pressure": 100000.0, "helium_void_fraction": 0.75,
@@ -98,6 +104,35 @@ def energy_field(name: str) -> dict:
     return {**g, "kjmol": e, "desc": desc, "cpu_s": p["cpu_s"]}
 
 
+def pore_blocking(name: str, f: dict | None = None, enabled: bool = True) -> tuple[dict, Path | None]:
+    """Inaccessible-pocket analysis for the structure (cached under data/blocks/<forcefield>/).
+    Returns (summary, block file or None). enabled=False reports the analysis but blocks nothing."""
+    alias = raspa_alias(name)
+    s, blk = blocking.cached(alias, forcefield.NAME)
+    if s is None:
+        f = f or energy_field(name)
+        cell = blocking.cell_from_cif(f["desc"].prepared_path)
+        s = blocking.analyse(f, cell)
+        blk = blocking.write(alias, s, forcefield.NAME)
+    if not enabled:
+        return {**s, "enabled": False, "disabled_by_request": True}, None
+    return s, blk
+
+
+def blocking_record(s: dict) -> dict:
+    """The "pore_blocking" entry of a science JSON (spheres included for the 3D view)."""
+    keys = ("enabled", "n_pockets", "n_spheres", "blocked_fraction", "blocked_volume_fraction",
+            "accessible_fraction", "channel_dims", "clean_cover", "threshold_kt", "threshold_kjmol",
+            "method", "pockets", "spheres", "cell")
+    return {k: s.get(k) for k in keys}
+
+
+def _grid_points_cart(f: dict) -> np.ndarray:
+    n, size, shift = f["n"], f["size"], f["shift"]
+    ax = [shift[i] + np.arange(n[i] + 1) * size[i] / n[i] for i in range(3)]
+    return np.stack(np.meshgrid(*ax, indexing="ij"), axis=-1).reshape(-1, 3)
+
+
 def write_cube(path: Path, f: dict) -> None:
     """Gaussian cube (Bohr units) of the probe energy, axis-aligned box as RASPA tabulates it."""
     e, n, size, shift = f["kjmol"], f["n"], f["size"], f["shift"]
@@ -116,25 +151,33 @@ def write_cube(path: Path, f: dict) -> None:
     path.write_text("\n".join(lines) + "\n" + body + "\n")
 
 
-def pocket_stats(f: dict) -> dict:
+def pocket_stats(f: dict, blocked: np.ndarray | None = None) -> dict:
+    """Probe-energy distribution over the attractive (E < 0) region. Grid points inside block spheres
+    (inaccessible pockets) are left out; their share is reported as blocked_point_fraction."""
     e = f["kjmol"].reshape(-1)
-    acc = e[e < 0]  # accessible: attractive region (overlap is strongly positive)
+    att = e < 0  # accessible: attractive region (overlap is strongly positive)
+    nb = 0
+    if blocked is not None:
+        nb = int((att & blocked).sum())
+        att &= ~blocked
+    acc = e[att]
     if not len(acc):
         return {}
     hist, edges = np.histogram(acc, bins=24, range=(-30, 0))
     return {"accessible_fraction": round(float(len(acc) / len(e)), 3),
+            **({"blocked_point_fraction": round(nb / (nb + len(acc)), 4)} if blocked is not None else {}),
             "min_kjmol": round(float(acc.min()), 2), "p05_kjmol": round(float(np.percentile(acc, 5)), 2),
             "median_kjmol": round(float(np.median(acc)), 2),
             "strong_fraction": round(float(np.mean(acc < -10.0)), 3),
             "hist": {"counts": hist.tolist(), "edges": [round(x, 2) for x in edges.tolist()]}}
 
 
-def isotherm(name: str) -> list[dict]:
+def isotherm(name: str, block: Path | None = None) -> list[dict]:
     desc = describe(_cif(name), PROJECT_ROOT / "data" / "prepared")
 
     def at(pbar):
         o = _oracle(name)  # one connection per thread: sqlite objects are not shareable
-        p = o._run_child(_job(desc, o, kind="mc_direct", pressure=pbar * 1e5, cycles=500, init_cycles=150),
+        p = o._run_child(_job(desc, o, block, kind="mc_direct", pressure=pbar * 1e5, cycles=500, init_cycles=150),
                          900, "sci", 0.0)
         if p["status"] != "ok":
             return {"p_bar": pbar, "uptake": None, "err": None}
@@ -145,18 +188,85 @@ def isotherm(name: str) -> list[dict]:
         return list(ex.map(at, PRESSURES_BAR))
 
 
-def compute(name: str) -> dict:
+def _backup_noblock(name: str) -> None:
+    """Keep pre-blocking results (JSON without a "pore_blocking" entry) for the before/after line."""
+    for src, dst in ((SCI_DIR / f"{raspa_alias(name)}.json", noblock_path(name)),
+                     (props_path(name), props_noblock_path(name))):
+        if not src.exists() or dst.exists():
+            continue
+        d = json.loads(src.read_text())
+        if "pore_blocking" in d:
+            continue
+        if src == props_path(name) and noblock_path(name).exists():
+            # re-derive from the unblocked isotherm: a props run that started after the base JSON
+            # was already blocked would otherwise mix a blocked 0.15 bar point into the old numbers
+            nb = json.loads(noblock_path(name).read_text())
+            d = {**d, **derive_props(nb.get("isotherm", []), d.get("points", {}), nb.get("pockets"))}
+        dst.write_text(json.dumps(d))
+
+
+def noblock_path(name: str) -> Path:
+    return SCI_DIR / f"{raspa_alias(name)}.noblock.json"
+
+
+def props_noblock_path(name: str) -> Path:
+    return SCI_DIR / f"{raspa_alias(name)}.props.noblock.json"
+
+
+def compute(name: str, block: bool = True) -> dict:
     SCI_DIR.mkdir(parents=True, exist_ok=True)
     alias = raspa_alias(name)
+    _backup_noblock(name)
     f = energy_field(name)
     write_cube(SCI_DIR / f"{alias}.cube", f)
+    pb, blk = pore_blocking(name, f, enabled=block)
+    mask = blocking.blocked_mask(_grid_points_cart(f), blocking.cell_from_cif(f["desc"].prepared_path),
+                                 pb["spheres"]) if blk else None
     code = zeolite_code(name)
     label = f"{code} zeolite (pure-silica)" if code else REFERENCES.get(name, name.replace("_clean", ""))
     out = {"name": name, "label": label, **({"zeolite": code} if code else {}),
-           "pockets": pocket_stats(f), "isotherm": isotherm(name),
+           "pockets": pocket_stats(f, mask), "isotherm": isotherm(name, blk),
+           "pore_blocking": blocking_record(pb),
            "metals": f["desc"].metals, "n_atoms": f["desc"].n_atoms,
            "note": "visualization runs, outside every budget; no framework charges in this model"}
-    (SCI_DIR / f"{alias}.json").write_text(json.dumps(out))
+    tmp = SCI_DIR / f"{alias}.json.tmp"
+    tmp.write_text(json.dumps(out))
+    os.replace(tmp, SCI_DIR / f"{alias}.json")
+    return out
+
+
+def annotate_blocking(name: str) -> dict:
+    """Pocket analysis only. If the structure has no inaccessible pockets, its existing (unblocked)
+    results are already the blocked ones: record "pore_blocking": disabled in place, no GCMC rerun.
+    Returns the summary; the caller recomputes when summary["enabled"]."""
+    alias = raspa_alias(name)
+    s, _ = pore_blocking(name)
+    js = SCI_DIR / f"{alias}.json"
+    if not s["enabled"] and js.exists():
+        d = json.loads(js.read_text())
+        if "pore_blocking" not in d:
+            d["pore_blocking"] = blocking_record(s)
+            tmp = js.with_suffix(".tmp")
+            tmp.write_text(json.dumps(d))
+            os.replace(tmp, js)
+    return s
+
+
+def _noblock_summary(name: str) -> dict | None:
+    """Uptake at 0.15 and 1 bar (and selectivity / Q_st when available) before pore blocking."""
+    f = noblock_path(name)
+    if not f.exists():
+        return None
+    d = json.loads(f.read_text())
+    iso = {round(q["p_bar"], 3): q for q in d.get("isotherm", [])}
+    out = {"isotherm": d.get("isotherm", []),
+           "uptake_0p15": (iso.get(0.15) or {}).get("uptake"), "uptake_1": (iso.get(1.0) or {}).get("uptake")}
+    pf = props_noblock_path(name)
+    if pf.exists():
+        p = json.loads(pf.read_text())
+        out["selectivity"] = (p.get("selectivity") or {}).get("value")
+        out["qst"] = ((p.get("qst") or {}).get("widom") or {}).get("value")
+        out["wc_vsa"] = ((p.get("wc") or {}).get("vsa") or {}).get("value")
     return out
 
 
@@ -173,7 +283,13 @@ def cached(name: str) -> dict | None:
         return None
     d = json.loads(f.read_text())
     pr = cached_props(name)
-    return {**d, "props": pr} if pr else d
+    pb = d.get("pore_blocking") or {}
+    if pb.get("enabled") and not pb.get("cell"):  # results written before the cell was recorded
+        bs = blocking.cached(raspa_alias(name), forcefield.NAME)[0] or {}
+        if bs.get("cell"):
+            d["pore_blocking"] = {**pb, "cell": bs["cell"]}
+    nb = _noblock_summary(name) if pb.get("enabled") else None
+    return {**d, **({"props": pr} if pr else {}), **({"noblock": nb} if nb else {})}
 
 
 def get(name: str) -> dict:
@@ -317,32 +433,32 @@ def derive_props(iso: list[dict], pts: dict, pockets: dict | None = None) -> dic
     return out
 
 
-def _props_jobs(desc, o: Oracle) -> dict[str, tuple[dict, float]]:
+def _props_jobs(desc, o: Oracle, block: Path | None = None) -> dict[str, tuple[dict, float]]:
     """name -> (job, CPU limit s). Production cycles PROPS_CYCLES per GCMC point."""
     mc = dict(cycles=PROPS_CYCLES, init_cycles=PROPS_INIT)
     return {
-        "mixture": (_job(desc, o, kind="mc_mixture", forcefield=forcefield.MIX_NAME, temperature=T_ADS,
+        "mixture": (_job(desc, o, block, kind="mc_mixture", forcefield=forcefield.MIX_NAME, temperature=T_ADS,
                          pressure=P_FLUE_BAR * 1e5, **mc,
                          components=[{"molecule": g, "mol_fraction": y} for g, y in FLUE_Y.items()]), 7200),
-        "vsa_des": (_job(desc, o, kind="mc_direct", temperature=T_ADS, pressure=P_DES_VSA_BAR * 1e5,
+        "vsa_des": (_job(desc, o, block, kind="mc_direct", temperature=T_ADS, pressure=P_DES_VSA_BAR * 1e5,
                          enthalpy=True, **mc), 2400),
-        "tsa_des": (_job(desc, o, kind="mc_direct", temperature=T_DES_TSA, pressure=P_ADS_BAR * 1e5,
+        "tsa_des": (_job(desc, o, block, kind="mc_direct", temperature=T_DES_TSA, pressure=P_ADS_BAR * 1e5,
                          enthalpy=True, **mc), 2400),
-        "widom": (_job(desc, o, kind="widom", forcefield=forcefield.MIX_NAME, temperature=T_ADS,
+        "widom": (_job(desc, o, block, kind="widom", forcefield=forcefield.MIX_NAME, temperature=T_ADS,
                        cycles=WIDOM_CYCLES, init_cycles=0,
                        components=[{"molecule": g} for g in FLUE_Y]), 2400),
     }
 
 
-def _run_point(name: str, key: str) -> tuple[str, dict]:
+def _run_point(name: str, key: str, block: Path | None = None) -> tuple[str, dict]:
     desc = describe(_cif(name), PROJECT_ROOT / "data" / "prepared")
     o = _oracle(name)
     _ensure_mix_forcefield(o)
-    job, limit = _props_jobs(desc, o)[key]
+    job, limit = _props_jobs(desc, o, block)[key]
     p = o._run_child(job, limit, "sci", 0.0)
     r = p.get("result") or {}
     r.pop("lj_check", None)
-    return key, {"status": p["status"], "cpu_s": round(p["cpu_s"], 1), "wall_s": round(p["wall_s"], 1),
+    return key, {"status": p["status"], "blocked": block is not None, "cpu_s": round(p["cpu_s"], 1), "wall_s": round(p["wall_s"], 1),
                  **({"error": p.get("stderr", p.get("killed_by", ""))[-400:]} if p["status"] != "ok" else {}), **r}
 
 
@@ -352,16 +468,23 @@ def compute_props(name: str, ex: ThreadPoolExecutor | None = None) -> dict:
     base = cached(name)
     if base is None:
         base = compute(name)
+    _backup_noblock(name)
+    pb = base.get("pore_blocking") or {}
+    blk = blocking.cached(raspa_alias(name), forcefield.NAME)[1] if pb.get("enabled") else None
     old = (cached_props(name) or {}).get("points", {})
-    keys = [k for k in ("mixture", "vsa_des", "tsa_des", "widom") if (old.get(k) or {}).get("status") != "ok"]
+    # reuse a finished point only if it was run with the same blocking (points from before blocking
+    # carry no "blocked" key: they count as unblocked)
+    keys = [k for k in ("mixture", "vsa_des", "tsa_des", "widom")
+            if (old.get(k) or {}).get("status") != "ok" or bool((old.get(k) or {}).get("blocked")) != (blk is not None)]
     own = ex is None
     ex = ex or ThreadPoolExecutor(3)
     try:
-        pts = {**old, **dict(f.result() for f in [ex.submit(_run_point, name, k) for k in keys])}
+        pts = {**old, **dict(f.result() for f in [ex.submit(_run_point, name, k, blk) for k in keys])}
     finally:
         if own:
             ex.shutdown()
     out = {"name": name, "label": base.get("label", name), "points": pts,
+           "pore_blocking": {k: pb.get(k) for k in ("enabled", "n_pockets", "blocked_fraction", "method")},
            **derive_props(base.get("isotherm", []), pts, base.get("pockets")),
            "conditions": {"flue_y": FLUE_Y, "p_total_bar": P_FLUE_BAR, "T_ads_K": T_ADS, "p_ads_bar": P_ADS_BAR,
                           "p_des_vsa_bar": P_DES_VSA_BAR, "T_des_tsa_K": T_DES_TSA,
@@ -411,11 +534,29 @@ def _main(argv: list[str]) -> None:
     ap = argparse.ArgumentParser(prog="python -m sieve.science")
     ap.add_argument("--props", action="store_true", help="compute capture properties (selectivity, WC, Qst)")
     ap.add_argument("--jobs", type=int, default=3, help="concurrent RASPA jobs (props only)")
+    ap.add_argument("--no-block", action="store_true", help="base science without pore blocking")
+    ap.add_argument("--reblock", action="store_true",
+                    help="pocket analysis; recompute base science (and props, if present) only for "
+                         "structures with inaccessible pockets, keeping the unblocked results as *.noblock.json")
     ap.add_argument("names", nargs="+")
     a = ap.parse_args(argv)
+    if a.reblock:
+        for n in a.names:
+            s = annotate_blocking(n)
+            print(n, "pockets", s["n_pockets"], "blocked_fraction", s["blocked_fraction"], flush=True)
+            if not s["enabled"]:
+                continue
+            d = cached(n)
+            if d is None or not (d.get("pore_blocking") or {}).get("enabled"):
+                d = compute(n)
+                print(n, "blocked", [(x["p_bar"], x["uptake"]) for x in d["isotherm"]], flush=True)
+            pr = cached_props(n)
+            if (pr is not None or a.props) and not ((pr or {}).get("pore_blocking") or {}).get("enabled"):
+                _report(n, compute_props(n))
+        return
     if not a.props:
         for n in a.names:
-            d = compute(n)
+            d = compute(n, block=not a.no_block)
             print(n, d["pockets"].get("strong_fraction"), [(x["p_bar"], x["uptake"]) for x in d["isotherm"]], flush=True)
         return
     for n in a.names:  # base science first (it uses its own 3-job pool)

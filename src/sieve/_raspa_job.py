@@ -70,6 +70,8 @@ def _script(job: dict) -> str:
             "            SwapProbability          1.0",
             "            CreateNumberOfMolecules  0",
         ]
+    if job.get("block_file") and job["kind"] != "makegrid":
+        comp = _with_blocking(comp, job)
     if job["kind"] == "makegrid":
         return "\n".join(["SimulationType                MakeGrid", *head, *grid, *comp]) + "\n"
     mc = [
@@ -90,6 +92,25 @@ def _script(job: dict) -> str:
         mc = [x.replace("Movies                        no", "Movies                        yes") for x in mc]
         mc += [f"WriteMoviesEvery              {job.get('movie_every', 20)}"]
     return "\n".join([*mc, *comp]) + "\n"
+
+
+def block_name(job: dict) -> str:
+    """Stem of the .block file copied into the workdir (RASPA opens ./<name>.block first)."""
+    return f"{job['alias']}_sieve"
+
+
+def _with_blocking(comp: list[str], job: dict) -> list[str]:
+    """Add BlockPockets to every component block (after its MoleculeDefinition line). RASPA checks
+    every atom of every trial position (insertion, translation, reinsertion, identity change,
+    Widom) against the spheres of the component's own block file; N2 uses the CO2-derived pockets
+    (larger kinetic diameter, so anything closed to CO2 is closed to N2)."""
+    out = []
+    for line in comp:
+        out.append(line)
+        if line.strip().startswith("MoleculeDefinition"):
+            out += ["            BlockPockets             yes",
+                    f"            BlockPocketsFileName     {block_name(job)}"]
+    return out
 
 
 def _components(job: dict) -> list[str]:
@@ -170,6 +191,14 @@ def _check_interactions(raw: str, job: dict) -> dict:
     return {el: seen[el] for el in job["elements"]}
 
 
+def _check_blocking(raw: str, job: dict) -> int:
+    """RASPA silently runs unblocked when it cannot open the .block file; refuse that."""
+    n = [int(x) for x in re.findall(r"Number of pockets blocked in a unitcell:\s*(\d+)", raw)]
+    if "Pockets are blocked for this component" not in raw or not n or min(n) <= 0:
+        raise RuntimeError("BlockPockets requested but RASPA loaded no block centres")
+    return min(n)
+
+
 def main() -> None:
     threading.Thread(target=_orphan_watchdog, daemon=True).start()
     job_path, out_path = sys.argv[1], sys.argv[2]
@@ -177,6 +206,9 @@ def main() -> None:
     os.chdir(job["workdir"])
     with open(f"{job['alias']}.cif", "w") as f:
         f.write(open(job["cif_path"]).read())
+    if job.get("block_file") and job["kind"] != "makegrid":
+        with open(f"{block_name(job)}.block", "w") as f:
+            f.write(open(job["block_file"]).read())
     with open("simulation.input", "w") as f:
         f.write(_script(job))
 
@@ -192,6 +224,8 @@ def main() -> None:
             f.write(raw)
     interactions = _check_interactions(raw, job)
     result = {"kind": job["kind"]}
+    if job.get("block_file") and job["kind"] != "makegrid":
+        result["blocked_centers"] = _check_blocking(raw, job)
     if job["kind"] == "makegrid":
         result["grid_ok"] = "Percentage finished                      : 100" in raw
     else:

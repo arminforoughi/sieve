@@ -37,6 +37,7 @@
   </section>
 
   <div class="kpis" id="kpis"></div>
+  <p class="block-line" id="blockline" hidden></p>
   <div class="callout info status" id="status" hidden></div>
   <p class="caveat-line">Simulated with <b>SieveUFF</b> (UFF Lennard-Jones + TraPPE CO₂) and <b>no framework charges</b>: binding here is geometric/van der Waals only, so open-metal-site MOFs are under-predicted. Values rank structures; they are not experimental predictions. <a href="#methods">Methods &amp; caveats</a></p>
 
@@ -47,6 +48,7 @@
         <label><input type="checkbox" id="L-fw" checked> framework</label>
         <label><input type="checkbox" id="L-pk" checked> pockets</label>
         <label><input type="checkbox" id="L-co2" checked> CO₂ snapshots</label>
+        <label id="L-blk-wrap" hidden><input type="checkbox" id="L-blk" checked> blocked</label>
         <label class="iso">threshold <input type="range" id="iso" min="-20" max="-4" step="1" value="-10" aria-label="Pocket threshold kJ/mol"> <b id="iso-v" class="mono">−10</b> kJ/mol</label>
         <button class="btn sm" id="spin" aria-pressed="false">Rotate</button>
         <button class="btn sm" id="reset">Reset view</button>
@@ -96,6 +98,7 @@
             <span class="tier t1">T1</span> GCMC 100 init + 500 cycles at 1 bar, nominal ±18%: <b>not converged, used only to rank</b>.<br>
             <span class="tier t2">T2</span> GCMC 400 init + 2000 cycles at 1 bar, nominal ±8.6%: the only tier a winner may be named on.</dd>
           <dt>This page</dt><dd>Isotherm: 150 init + 500 cycles at 0.05–5 bar. Pockets: RASPA's 0.5 Å energy grid for the CO₂ oxygen probe; "strong" = below −10 kJ/mol. Run outside every screening budget and cached in <code>data/science/</code>.</dd>
+          <dt>Pore blocking</dt><dd>GCMC insertions are uniform in the box, so they also fill cages CO₂ cannot reach from the gas (the sodalite cages of LTA and FAU behind 6-rings of ~2.3 Å; CO₂'s kinetic diameter is 3.3 Å). We find them on the same 0.5 Å CO₂-oxygen probe grid: a point is <b>accessible</b> if its energy is below <b>15 k<sub>B</sub>T</b> (37 kJ/mol at 298 K); accessible points are joined into components with periodic 6-connectivity, tracking the lattice image of every join across the cell faces. A component that reaches a periodic image of itself is a channel open to the gas; every other component is an <b>inaccessible pocket</b>. Each pocket is covered with spheres (centre at its points, radius to its farthest point plus half a voxel diagonal, never reaching an open channel) and RASPA's <code>BlockPockets</code> rejects any trial position with an atom inside a sphere, for insertion, translation, reinsertion, identity change and Widom moves alike. Pocket statistics leave the blocked points out; the grey spheres in the 3D view show them. Results from before blocking are kept for the before/after line. HKUST-1's small tetrahedral pockets come out connected to the large cages, so they are not blocked, in line with the literature.</dd>
           <dt>Capture</dt><dd>
             <b>Flue gas</b>: 15:85 CO₂:N₂, 1 bar total, 298 K. Binary GCMC (swap + identity-change moves, 200 init + 500 cycles) with TraPPE N₂ (2 LJ sites, 1.10 Å) added to the same force field; no charges on any molecule, as for CO₂.<br>
             <b>Selectivity</b> S = (x<sub>CO₂</sub>/x<sub>N₂</sub>)/(y<sub>CO₂</sub>/y<sub>N₂</sub>), x = adsorbed loadings in the mixture, y = 0.15/0.85; error from both loadings in quadrature. S₀ = K<sub>H</sub>(CO₂)/K<sub>H</sub>(N₂) is the infinite-dilution limit.<br>

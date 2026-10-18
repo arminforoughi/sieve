@@ -85,8 +85,8 @@ On 9 paired measurements grid and direct agree within reported error (tier-2 dif
 - **No charges, no Ewald.** Agreed trade-off: 2.3x faster; IRMOF-1 uptake unchanged within error.
 - **Pool filter.** Structures with pore-limiting diameter < 3.3 A (CO2's kinetic diameter) are
   excluded for every arm: without pocket blocking, GCMC places CO2 in pores no molecule can reach
-  (27% of CoRE). 8,794 candidates remain. Isolated pockets in accessible structures are still
-  not blocked.
+  (27% of CoRE). 8,794 candidates remain. Isolated pockets in accessible structures are not
+  blocked in the screening runs so far (see Pore blocking).
 - **Workers = performance cores - 1** (7 on an M1 Max), not ncores - 1: the efficiency cores burn
   CPU-seconds 2-3x faster for the same work.
 - **No labels.csv.** Boyd-Woo labels are for hypothetical MOFs, not CoRE, and were computed with
@@ -96,6 +96,27 @@ On 9 paired measurements grid and direct agree within reported error (tier-2 dif
 - **Build order.** `workers.py` was written before the baselines finished, because three 4 CPU-hour
   arms need parallel workers to finish in a working day. No agent code exists until all three
   baselines have run to completion.
+
+## Pore blocking
+
+GCMC insertions are uniform in the box, so they also fill cages CO2 cannot reach from the gas
+(the sodalite cages of LTA and FAU behind 6-rings). `sieve/blocking.py` finds them on RASPA's own
+O_co2 probe grid: points below 15 k_B T are accessible, they are joined with periodic
+6-connectivity (union-find over the cell faces that tracks lattice image shifts, so non-orthogonal
+cells and pockets straddling the cell boundary are handled), and every component that does not
+reach a periodic image of itself is a pocket. Pockets are covered with spheres and written as a
+RASPA `.block` file (count, then fractional x y z and radius in A per line), cached in
+`data/blocks/<forcefield>/<alias>.block` with a JSON summary; no pockets, no file.
+
+- **Science page: on by default.** `python -m sieve.science --reblock <names>` analyses each
+  structure and recomputes only those with pockets; the unblocked results are kept as
+  `<alias>.noblock.json` / `<alias>.props.noblock.json` for the before/after line.
+- **Screening: off by default**, so every run so far stays comparable. To use it in a future
+  full run, put `"block_pockets": true` in the run's config (`runs.config_json`), or construct
+  `Oracle(..., block_pockets=True)`. The oracle then blocks with the cached analysis for the
+  structure or, in grid mode, one computed from the run's own O_co2 grid; a direct-mode
+  evaluation without either runs unblocked and says so in its `meta.pore_blocking`.
+  **This should be the setting for the next full run.**
 
 ## Results
 

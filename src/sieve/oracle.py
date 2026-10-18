@@ -484,7 +484,7 @@ class Oracle:
                  budget_cpu_s: float = DEFAULT_BUDGET_CPU_S,
                  labels_path: str | os.PathLike | None = PROJECT_ROOT / "data" / "labels.csv",
                  prepared_dir: str | os.PathLike = PROJECT_ROOT / "data" / "prepared",
-                 env: RaspaEnv | None = None):
+                 env: RaspaEnv | None = None, block_pockets: bool | None = None):
         self.db_path = str(db_path)
         self.run_id = run_id
         self.budget_cpu_s = float(budget_cpu_s)
@@ -492,6 +492,36 @@ class Oracle:
         self._labels_path = labels_path
         self.con = connect(self.db_path)
         self.env = env or RaspaEnv()
+        # Opt-in pore blocking (sieve/blocking.py) for GCMC. OFF unless asked for, so screening
+        # results stay comparable with every earlier run: pass block_pockets=True, or put
+        # "block_pockets": true in the run's config (runs.config_json).
+        self.block_pockets = self._run_config().get("block_pockets", False) if block_pockets is None \
+            else bool(block_pockets)
+
+
+    def _run_config(self) -> dict:
+        try:
+            row = self.con.execute("SELECT config_json FROM runs WHERE run_id=?", (self.run_id,)).fetchone()
+        except sqlite3.Error:  # science/viz/calibration DBs have no runs table
+            return {}
+        try:
+            return json.loads(row[0]) if row and row[0] else {}
+        except (TypeError, ValueError):
+            return {}
+
+    def block_file(self, desc: Descriptors) -> tuple[Path | None, str]:
+        """(block file or None, why) for opt-in pore blocking: the cached analysis for this structure,
+        else one computed from this run's cached O_co2 grid. Without either, the run is unblocked."""
+        from sieve import blocking
+
+        summary, blk = blocking.cached(desc.alias, forcefield.NAME)
+        if summary is not None:
+            return blk, "cached" if blk else "no pockets"
+        if self.env.has_grid(self.framework_name(desc)):
+            blk = blocking.ensure_for_grid_dir(desc.alias, self.env.grid_dir(self.framework_name(desc)),
+                                               desc.prepared_path, forcefield.NAME)
+            return blk, "from grid" if blk else "no pockets"
+        return None, "no probe grid (direct mode): unblocked"
 
     # -- ledger ---------------------------------------------------------------------------
 
@@ -719,10 +749,16 @@ class Oracle:
                     shutil.rmtree(private, ignore_errors=True)
                 phases.append({**p, **cost})
                 self.env.evict()
+        blk_extra: dict = {}
+        pore_blocking = None
+        if self.block_pockets and (not phases or phases[-1]["status"] == "ok"):
+            blk, why = self.block_file(desc)
+            blk_extra = {"block_file": str(blk)} if blk else {}
+            pore_blocking = {"enabled": blk is not None, "why": why}
         if not phases or phases[-1]["status"] == "ok":
             kind = "mc_grid" if plan.mode == "grid" else "mc_direct"
             p = self._run_child({**base, "kind": kind, "raspa_root": str(self.env.root),
-                                 "cycles": t.cycles, "init_cycles": t.init_cycles},
+                                 "cycles": t.cycles, "init_cycles": t.init_cycles, **blk_extra},
                                 max(1.0, timeout_s - used()), eval_id, used())
             if p["status"] == "ok":
                 n = p["result"]["molecules_per_cell"] * math.prod(desc.unit_cells)
@@ -733,6 +769,8 @@ class Oracle:
         last = phases[-1]
         meta = {"plan": asdict(plan), "phases": phases, "unit_cells": list(desc.unit_cells),
                 "n_atoms_sim": desc.n_atoms_sim, "uptake_hint": uptake_hint}
+        if pore_blocking is not None:
+            meta["pore_blocking"] = pore_blocking
         status = last["status"]
         if status == "timeout":
             self.con.execute("INSERT INTO timeouts VALUES (?,?,?,?,?,?,?,?)",

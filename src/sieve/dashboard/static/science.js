@@ -12,7 +12,9 @@ const REFS = ["Cu-BTC", "MgMOF-74-VASP"];
 const LIT = { "Cu-BTC": ["≈ 4–4.5", "HKUST-1, ~298 K, 1 bar"], "MgMOF-74-VASP": ["≈ 8", "296 K, 1 atm (Caskey et al., JACS 2008)"] };
 // series styles: the selected structure is the only coloured series; comparators are ink tones + dashes
 const COMP_STYLE = [{ c: INK, dash: "6 3" }, { c: "#7C828E", dash: "2 3" }, { c: "#A9AEB7", dash: "9 3 2 3" }];
-const S = { zeoOn: null, items: [], data: {}, meas: {}, sel: null, v: null, fw: null, cube: null, shapes: [], frames: [], co2: null, anim: null, moved: false, tick: null };
+const S = { zeoOn: null, items: [], data: {}, meas: {}, sel: null, v: null, fw: null, cube: null, shapes: [], blk: [], frames: [], co2: null, anim: null, moved: false, tick: null };
+const BLOCK_GREY = "#7C828E";
+const pbOf = (d) => (d && d.pore_blocking) || null;
 const esc = (t) => String(t ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const fx = (x, k = 2) => (x == null || isNaN(x) ? "–" : Number(x).toFixed(k));
 const zeo = (n) => { const m = /^IZA-([A-Z]{3})$/i.exec(String(n || "")); return m ? m[1].toUpperCase() : null; };
@@ -22,8 +24,8 @@ const pct = (f) => { const v = 100 * f; return v === 0 ? "0" : v < 10 ? v.toFixe
 const ZEO_CAVEAT = "Pure-silica frameworks (IZA-SC, DLS-76 geometry) with no extra-framework cations. Industrial zeolites such as 13X (NaX) and 5A (CaA) "
   + "bind CO₂ through their Na⁺/Ca²⁺ cations and the field around them, which neither these structures nor this charge-free model contain, "
   + "so these values are not predictions for 13X or 5A, and any agreement with their measured uptake is coincidental. They show what the topology alone gives under the same force field. "
-  + "No pore blocking either: GCMC also fills cages CO₂ cannot enter through their 6-rings (the sodalite cages of LTA and FAU), "
-  + "so those uptakes are inflated (LTA's deepest wells, −15.5 kJ/mol, sit inside its sodalite cages).";
+  + "Cages CO₂ cannot enter through their 6-rings (the sodalite cages of LTA and FAU, the small cages of DDR) are blocked in every GCMC run "
+  + "(see Pore blocking under Methods); before blocking, GCMC filled them and LTA's uptake was inflated (its deepest wells, −15.5 kJ/mol, sit inside the sodalite cages).";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const getJSON = (u) => fetch(u).then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); });
 const typical = () => (S.items.find((i) => /typical/.test(i.role)) || {}).name;
@@ -39,6 +41,7 @@ async function boot() {
   renderPresets();
   initSearch();
   ["L-fw", "L-pk", "L-co2"].forEach((id) => ($(id).onchange = () => layers()));
+  $("L-blk").onchange = () => { blockSpheres(); legend3d(); };
   $("iso").oninput = () => { $("iso-v").textContent = `−${Math.abs(+$("iso").value)}`; };
   $("iso").onchange = () => { pockets(); legend3d(); caption(); };
   $("spin").onclick = () => { const on = $("spin").getAttribute("aria-pressed") !== "true"; $("spin").setAttribute("aria-pressed", on); if (S.v) S.v.spin(on ? "y" : false, 0.4); };
@@ -136,7 +139,7 @@ function status(kind, msg, since) {
 }
 
 // ------------------------------------------------------------------------------- render all
-function renderAll() { header(); kpis(); exports(); drawCharts(); table(); measTable(); caption(); }
+function renderAll() { header(); kpis(); blockLine(); exports(); drawCharts(); table(); measTable(); caption(); }
 
 function header() {
   const m = S.meas[S.sel] || {}, p = m.pool || {}, d = S.data[S.sel] || {};
@@ -148,6 +151,9 @@ function header() {
   if (best) tags.push(`<span class="chip ${best.tier === 2 ? "ok" : "warn"}">screened: ${tierTag(best.tier)} ${fx(best.uptake)} ± ${fx(best.err)} mol/kg</span>`);
   else if (m.rows && m.pool) tags.push(`<span class="chip">not screened by any run</span>`);
   if (d.n_atoms || p.n_atoms) tags.push(`<span class="chip">${d.n_atoms || p.n_atoms} atoms / cell</span>`);
+  const pb = pbOf(d);
+  if (pb && pb.enabled) tags.push(`<span class="chip blk" title="${esc(pb.method || "")}">pore blocking · ${pb.n_pockets} pocket${pb.n_pockets === 1 ? "" : "s"} blocked</span>`);
+  else if (pb) tags.push(`<span class="chip" title="${esc(pb.method || "")}">no inaccessible pockets</span>`);
   if (zeo(S.sel)) {
     tags.push(`<span class="chip" title="IZA-SC Database of Zeolite Structures (Baerlocher & McCusker), DLS-76-optimised SiO₂">IZA framework ${esc(zeo(S.sel))}</span>`);
     tags.push(`<span class="chip warn" title="${esc(ZEO_CAVEAT)}">pure-silica · no cations</span>`);
@@ -170,7 +176,8 @@ function kpis() {
     kpi("Uptake at 0.15 bar", a15.uptake != null ? `${fx(a15.uptake)} <small>± ${fx(a15.err)}</small>` : wait, "mol/kg · flue-gas CO₂ pressure", true)
     + kpi("Uptake at 1 bar", a1.uptake != null ? `${fx(a1.uptake)} <small>± ${fx(a1.err)}</small>` : wait, "mol/kg · 298 K")
     + kpi("Strong-binding pore", k.strong_fraction != null ? `${pct(k.strong_fraction)}<small>%</small>` : wait, "of accessible volume below −10 kJ/mol")
-    + kpi("Deepest well", k.min_kjmol != null ? `${fx(k.min_kjmol, 1)}` : wait, `kJ/mol · median ${fx(k.median_kjmol, 1)}`)
+    + kpi("Deepest well", k.min_kjmol != null ? `${fx(k.min_kjmol, 1)}` : wait, `kJ/mol · median ${fx(k.median_kjmol, 1)}${pbOf(d) && pbOf(d).enabled ? " · reachable pore" : ""}`)
+
     + kpi("PLD / LCD", p.PLD != null ? `${fx(p.PLD, 1)} <small>/</small> ${fx(p.LCD, 1)}` : "–", p.PLD != null || !zeo(S.sel) ? "Å · pore-limiting / largest cavity" : "Å · not available: zeolites have no CoRE/Zeo++ descriptors")
     + kpi("Void fraction · density", p.VF != null ? `${fx(p.VF)} <small>·</small> ${fx(p.density)}` : d.density != null ? `– <small>·</small> ${fx(d.density)}` : "–", p.VF != null ? "· g/cm³ (tier-0 descriptors)" : d.density != null ? "· g/cm³ (from the CIF; no void fraction without Zeo++)" : "· g/cm³ (tier-0 descriptors)");
   // capture performance: only once the props step has run for this structure
@@ -181,6 +188,22 @@ function kpis() {
     kpi("CO₂/N₂ selectivity", pm(sel, sel && sel.value >= 100 ? 0 : 1) || none, pr ? "15:85 flue gas · 1 bar · 298 K" : "capture props not computed", !!sel)
     + kpi("Working capacity · VSA", pm(vsa, 2) || none, "mol/kg · 0.15 → 0.01 bar, 298 K", !!vsa)
     + kpi("Q<sub>st</sub> CO₂", pm(q, 1) || none, q ? `kJ/mol · Widom, ∞ dilution · well ${fx(k.min_kjmol, 1)}` : "kJ/mol · Widom, infinite dilution", !!q);
+}
+
+// before/after: the same isotherm points from the run before pore blocking (<alias>.noblock.json)
+function blockLine() {
+  const d = S.data[S.sel] || {}, pb = pbOf(d), nb = d.noblock, el = $("blockline");
+  if (!pb || !pb.enabled || !nb) { el.hidden = true; return; }
+  const a1 = at(d, 1).uptake, a15 = at(d, 0.15).uptake, pr = d.props || {};
+  const chg = (o, n) => (o != null && n != null && o ? ` <span class="dim">(${n >= o ? "+" : "−"}${Math.abs(100 * (n - o) / o).toFixed(0)}%)</span>` : "");
+  const part = (lab, o, n, k = 2, u = " mol/kg") => (o == null || n == null ? "" : `${lab} without blocking <b>${fx(o, k)}</b>, with blocking <b>${fx(n, k)}</b>${u}${chg(o, n)}`);
+  const sel = (pr.selectivity || {}).value, q = ((pr.qst || {}).widom || {}).value;
+  const props = (pr.pore_blocking || {}).enabled;
+  const bits = [part("Uptake at 1 bar", nb.uptake_1, a1), part("at 0.15 bar", nb.uptake_0p15, a15),
+    props ? part("CO₂/N₂ selectivity", nb.selectivity, sel, 1, "") : "", props ? part("Q<sub>st</sub>", nb.qst, q, 1, " kJ/mol") : ""].filter(Boolean);
+  el.hidden = !bits.length;
+  el.innerHTML = `<span class="chip blk">pore blocking</span> ${bits.join(" · ")}. `
+    + `<span class="dim">${pb.n_pockets} inaccessible pocket${pb.n_pockets === 1 ? "" : "s"} per cell (${pct(pb.blocked_fraction)}% of the accessible volume) excluded from every insertion.</span>`;
 }
 
 function exports() {
@@ -218,7 +241,7 @@ async function show() {
   $("wait").hidden = true; $("wait").classList.remove("pill");
   try { S.cube = await fetch(`/api/science/cube?name=${encodeURIComponent(name)}`).then((r) => r.text()); } catch (_) { S.cube = ""; }
   if (S.sel !== name) return;
-  pockets();
+  pockets(); blockSpheres();
   getJSON(`/api/viz?name=${encodeURIComponent(name)}`).then((z) => { if (z.status === "ready" && S.sel === name) { S.frames = z.frames || []; layers(); } }).catch(() => {});
   if ($("spin").getAttribute("aria-pressed") === "true") v.spin("y", 0.4);
 }
@@ -226,7 +249,7 @@ async function show() {
 // the bare framework: drawn at once (from the CIF) while the energy grid may still be computing
 function framework(name, cif) {
   const v = viewer(); if (!v) return false;
-  clearInterval(S.anim); v.spin(false); v.clear(); v.removeAllShapes(); S.shapes = []; S.co2 = null; S.frames = []; S.cube = null;
+  clearInterval(S.anim); v.spin(false); v.clear(); v.removeAllShapes(); S.shapes = []; S.blk = []; S.co2 = null; S.frames = []; S.cube = null;
   S.fw = v.addModel(cif, "cif", { doAssembly: true, duplicateAssemblyAtoms: true, normalizeAssembly: true });
   const ax = { hidden: true, color: "#C3C8D0", radius: 0.02 };
   v.addUnitCell(S.fw, { box: { color: "#C3C8D0" }, astyle: ax, bstyle: ax, cstyle: ax, alabel: "", blabel: "", clabel: "" });
@@ -253,6 +276,27 @@ function pockets() {
   v.render();
 }
 
+// RASPA BlockPockets spheres (fractional centres, radius in Å), drawn at every image whose centre
+// falls in the unit cell shown (like the framework's duplicated boundary atoms)
+function blockSpheres() {
+  const v = S.v; if (!v) return;
+  for (const sh of S.blk) v.removeShape(sh);
+  S.blk = [];
+  const pb = pbOf(S.data[S.sel]), cell = pb && pb.cell;
+  $("L-blk-wrap").hidden = !(pb && pb.enabled);
+  if (pb && pb.enabled && cell && $("L-blk").checked) {
+    for (const s of pb.spheres || []) {
+      for (const i of [-1, 0, 1]) for (const j of [-1, 0, 1]) for (const k of [-1, 0, 1]) {
+        const f = [s.frac[0] + i, s.frac[1] + j, s.frac[2] + k];
+        if (f.some((x) => x < -0.01 || x > 1.01)) continue;
+        const c = [0, 1, 2].map((ax) => f[0] * cell[0][ax] + f[1] * cell[1][ax] + f[2] * cell[2][ax]);
+        S.blk.push(v.addSphere({ center: { x: c[0], y: c[1], z: c[2] }, radius: s.r, color: BLOCK_GREY, opacity: 0.38 }));
+      }
+    }
+  }
+  v.render();
+}
+
 function layers() {
   const v = S.v; if (!v || !S.fw) return;
   v.setStyle({ model: S.fw }, $("L-fw").checked ? { stick: { radius: 0.11, colorscheme: "Jmol" } } : { line: { hidden: true } });
@@ -270,7 +314,7 @@ function layers() {
     };
     tick(); if (!SNAP) S.anim = setInterval(tick, 350);
   }
-  pockets(); legend3d();
+  pockets(); blockSpheres(); legend3d();
 }
 
 function legend3d() {
@@ -281,6 +325,7 @@ function legend3d() {
     + `<span><i style="background:${ACCENT_DEEP}"></i>below −${t + 6} kJ/mol (deepest pockets)</span>`
     + (d.pockets && d.pockets.min_kjmol > -t ? `<span><b>Nothing in this pore is below −${t} kJ/mol</b> (deepest ${fx(d.pockets.min_kjmol, 1)}): lower the threshold to see its best sites.</span>` : "")
     + (S.frames.length && $("L-co2").checked ? `<span>CO₂ from a GCMC snapshot (red O, grey C)</span>` : "")
+    + ((pbOf(d) || {}).enabled && $("L-blk").checked ? `<span><i style="background:${BLOCK_GREY};opacity:.5;border-radius:50%"></i>blocked pocket (unreachable from the gas; no CO₂ inserted)</span>` : "")
     + els.map((e) => `<span class="el"><i style="background:${JM[e] || "#D0D0D0"}"></i>${e}</span>`).join("");
 }
 
@@ -290,6 +335,7 @@ function caption() {
   const p = d.pockets, u15 = at(d, 0.15).uptake, tn = typical(), t15 = at(S.data[tn], 0.15).uptake, h15 = at(S.data["Cu-BTC"], 0.15).uptake;
   $("cap").innerHTML = `The shaded surfaces enclose the regions where a CO₂ oxygen is held more strongly than the threshold, computed from the same force field the GCMC uses. `
     + `<b>${pct(p.strong_fraction)}%</b> of the accessible pore binds below −10 kJ/mol; the deepest well is <b>${fx(p.min_kjmol, 1)} kJ/mol</b>. `
+    + ((pbOf(d) || {}).enabled ? `Surfaces inside the grey spheres are cages CO₂ cannot reach; they are blocked in the GCMC and left out of these statistics. ` : "")
     + (u15 != null ? `At 0.15 bar it holds <b>${fx(u15)} mol/kg</b>` + [t15 && S.sel !== tn ? `${fx(u15 / t15, 1)}× the typical pool structure` : "", h15 && S.sel !== "Cu-BTC" ? `${fx(u15 / h15, 1)}× HKUST-1 in the same model` : ""].filter(Boolean).map((s, i) => (i ? " and " : ", ") + s).join("") + "." : "");
 }
 
@@ -316,7 +362,8 @@ function isoChart() {
   const { svg, W, H } = frameOf("iso-chart", 300), narrow = W < 460, m = { l: 48, r: narrow ? 12 : 92, t: 12, b: 40 };
   const names = compared().filter((n) => S.data[n] && S.data[n].isotherm);
   const meas = ((S.meas[S.sel] || {}).rows || []);
-  const ys = names.flatMap((n) => S.data[n].isotherm.map((p) => (p.uptake || 0) + (p.err || 0))).concat(meas.map((r) => r.uptake + r.err));
+  const nbAll = ((S.data[S.sel] || {}).noblock || {}).isotherm || [];
+  const ys = names.flatMap((n) => S.data[n].isotherm.map((p) => (p.uptake || 0) + (p.err || 0))).concat(meas.map((r) => r.uptake + r.err), nbAll.map((p) => p.uptake || 0));
   const x = d3.scaleLog().domain([0.04, 6.5]).range([m.l, W - m.r]);
   const y = d3.scaleLinear().domain([0, Math.max(1, d3.max(ys) || 1) * 1.06]).nice().range([H - m.b, m.t]);
   svg.append("g").attr("class", "gridl").attr("transform", `translate(${m.l},0)`).call(d3.axisLeft(y).ticks(5).tickSize(-(W - m.l - m.r)).tickFormat(""));
@@ -348,6 +395,13 @@ function isoChart() {
     const last = pts.at(-1);
     if (last) ends.push({ y: y(last.uptake), t: label(n), sel: n === S.sel });
   }
+  // the selected structure before pore blocking: a faint dotted line, for the before/after
+  const dsel = S.data[S.sel] || {}, nbIso = (pbOf(dsel) || {}).enabled && dsel.noblock ? (dsel.noblock.isotherm || []).filter((p) => p.uptake != null) : [];
+  if (nbIso.length) {
+    svg.append("path").attr("d", line(nbIso)).attr("fill", "none").attr("stroke", BLOCK_GREY).attr("stroke-width", 1.4).attr("stroke-dasharray", "1.5 3");
+    svg.selectAll(null).data(nbIso).enter().append("circle").attr("cx", (p) => x(p.p_bar)).attr("cy", (p) => y(p.uptake)).attr("r", 2.2).attr("fill", "#fff").attr("stroke", BLOCK_GREY)
+      .append("title").text((p) => `${label(S.sel)} without pore blocking · ${p.p_bar} bar: ${fx(p.uptake, 3)} ± ${fx(p.err, 3)} mol/kg`);
+  }
   // screening-run measurements of the selected structure (all at 1 bar)
   const mk = { 1: false, 2: false };
   meas.forEach((r, i) => {
@@ -361,6 +415,7 @@ function isoChart() {
     for (const e of ends) svg.append("text").attr("class", "lbl ink").attr("x", W - m.r + 8).attr("y", e.y + 4).attr("font-weight", e.sel ? 600 : 400).text(e.t);
   }
   for (const n of names) lg.push(`<span>${swatch(styleOf(n), true)}${esc(label(n))}${n === S.sel ? "" : ` (${roleOf(n)})`}</span>`);
+  if (nbIso.length) lg.push(`<span>${swatch({ c: BLOCK_GREY, dash: "1.5 3", w: 1.4 }, false)}${esc(label(S.sel))} without pore blocking</span>`);
   if (mk[2]) lg.push(`<span><svg width="12" height="12"><path d="${d3.symbol(d3.symbolDiamond, 46)()}" transform="translate(6,6)" fill="${INK}"/></svg>screening run, tier 2</span>`);
   if (mk[1]) lg.push(`<span><svg width="12" height="12"><path d="${d3.symbol(d3.symbolDiamond, 46)()}" transform="translate(6,6)" fill="#fff" stroke="${INK}"/></svg>screening run, tier 1 (unconverged)</span>`);
   $("iso-legend").innerHTML = lg.join("");
@@ -431,6 +486,7 @@ function table() {
     ["Deepest well <small>kJ/mol</small>", (n) => (D(n).pockets ? fx(D(n).pockets.min_kjmol, 1) : null)],
     ["5th percentile <small>kJ/mol</small>", (n) => (D(n).pockets ? fx(D(n).pockets.p05_kjmol, 1) : null)],
     ["Median <small>kJ/mol</small>", (n) => (D(n).pockets ? fx(D(n).pockets.median_kjmol, 1) : null)],
+    ["Blocked pockets <small>per cell</small>", (n) => { const b = pbOf(D(n)); return !b ? null : b.enabled ? `${b.n_pockets} <span class="pm">· ${pct(b.blocked_fraction)}% vol.</span>` : "0"; }],
     ["sec", "Structure (tier-0 descriptors)"],
     ["PLD / LCD <small>Å</small>", (n) => (P(n).PLD != null ? `${fx(P(n).PLD, 1)} / ${fx(P(n).LCD, 1)}` : null)],
     ["Void fraction", (n) => (P(n).VF != null ? fx(P(n).VF) : null)],
