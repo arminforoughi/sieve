@@ -327,6 +327,11 @@ const mol = {
     if (!window.$3Dmol) { $("m-empty").textContent = "3D viewer unavailable (3Dmol.js did not load)."; return; }
     try {  // no WebGL (some projector laptops, headless) must not take the rest of the page down
       for (const id of ["mv-a", "mv-b"]) this.views.push($3Dmol.createViewer($(id), { backgroundColor: "white", antialias: true }));
+      // the box changes size with the layout (window resize, wrapping): keep the model fitted to it
+      if (window.ResizeObserver) new ResizeObserver(() => {
+        const v = this.views[this.active];
+        if (v && this.curName) { v.resize(); v.zoomTo(); v.zoom(1.5); v.render(); }
+      }).observe($("mol"));
     } catch (e) {
       this.views = [];
       $("m-empty").textContent = "3D view needs WebGL, which this browser does not provide.";
@@ -362,7 +367,7 @@ const mol = {
         for (const p of P.void) v.addSphere({ center: { x: p[0] + a * L[0][0] + bb * L[1][0] + c * L[2][0],
           y: p[1] + a * L[0][1] + bb * L[1][1] + c * L[2][1], z: p[2] + a * L[0][2] + bb * L[1][2] + c * L[2][2] },
           radius: 0.9, color: ACCENT, opacity: 0.12 });
-      v.resize(); v.zoomTo(); v.zoom(1.05); v.render(); if (!params.get("snapshot")) v.spin("y", 0.4);
+      v.resize(); v.zoomTo(); v.zoom(1.5); v.render(); if (!params.get("snapshot")) v.spin("y", 0.4);
       $(next ? "mv-b" : "mv-a").classList.add("on");
       $(next ? "mv-a" : "mv-b").classList.remove("on");
       this.views[this.active].spin(false);

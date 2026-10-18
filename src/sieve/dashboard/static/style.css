@@ -1,14 +1,15 @@
 .app {
-  display: grid; gap: 8px; padding: 8px; height: calc(100vh - var(--shell-h)); min-height: 720px;
+  /* the page scrolls: the 3D view and the charts get real heights instead of sharing one screen */
+  display: grid; gap: 8px; padding: 8px;
   grid-template-columns: repeat(12, minmax(0, 1fr));
-  grid-template-rows: auto auto auto minmax(0, 1.25fr) auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto clamp(460px, 62vh, 720px) auto clamp(340px, 42vh, 480px);
   grid-template-areas:
     "hero hero hero hero hero hero hero hero hero hero hero hero"
     "head head head head head head head head head head head head"
     "banner banner banner banner banner banner banner banner banner banner banner banner"
     "stage stage stage stage stage stage stage scatter scatter scatter scatter scatter"
     "workers workers workers workers workers workers workers workers workers workers workers workers"
-    "agents agents agents agents progress progress progress progress stream stream stream stream";
+    "agents agents agents progress progress progress progress progress stream stream stream stream";
 }
 
 /* hero */
@@ -120,7 +121,7 @@
   .app { height: auto; min-height: 0; grid-template-columns: 1fr; grid-template-rows: none;
     grid-template-areas: "hero" "head" "banner" "stage" "scatter" "workers" "agents" "progress" "stream"; }
   .hero { flex-wrap: wrap; } .strip { flex-wrap: wrap; }
-  .stage, .scatter { height: 360px; } .progress, .stream { height: 300px; } .agents { max-height: 300px; }
+  .stage, .scatter { height: clamp(380px, 70vw, 520px); } .progress { height: 360px; } .stream { height: 320px; } .agents { max-height: 320px; }
 }
 .agent-rows li.empty { display: block; padding: 4px 8px; }
 .job.stalled { box-shadow: inset 0 0 0 1px var(--red); }
