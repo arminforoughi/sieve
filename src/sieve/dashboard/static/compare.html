@@ -8,6 +8,7 @@
 <style>
   .cmp { display: flex; flex-direction: column; gap: var(--gap); }
   .verdicts { display: flex; flex-direction: column; gap: 8px; }
+  .vlist { margin: 6px 0 0; padding-left: 18px; columns: 2 280px; column-gap: 24px; } .vlist li { margin: 1px 0; }
   .grid2 { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--gap); }
   #chart svg { display: block; width: 100%; height: 300px; }
   table.t tr.me td { background: var(--accent-soft); }
@@ -37,7 +38,7 @@
 <main class="page cmp">
   <div class="page-head"><div>
     <h1>Does SIEVE beat the baselines?</h1>
-    <p class="lead">Two kinds of evidence. The <b>full runs</b> screen the whole 12,020-structure pool once each on a 4 CPU-hour budget. The <b>arena</b> replays every arm over many seeds on 292 structures whose true tier-2 uptake is known, so the answer is a distribution, not one lucky run. Losses are shown as plainly as wins.</p>
+    <p class="lead">Two kinds of evidence. <b>Full runs</b>: each arm screens the 8,803 CoRE MOFs that pass the pore filter once, on 4 CPU-hours. <b>Arena</b>: every arm replayed over many seeds on a 300-structure benchmark, scored on the 292 with a converged tier-2 answer, so the result is a distribution, not one lucky run. Losses are shown as plainly as wins.</p>
   </div></div>
   <div class="verdicts" id="verdicts"><div class="card"><span class="spin"></span> Loading…</div></div>
 
@@ -66,7 +67,7 @@
   </section>
 
   <section class="card">
-    <h2>Full runs on the 12,020-structure pool <span class="sub">one run per arm · as measured by each arm itself</span></h2>
+    <h2>Full runs <span class="sub">8,803 candidates · one run per arm · as measured by each arm itself</span></h2>
     <div class="tbl-wrap"><table class="t" id="runs"></table></div>
     <p class="note" style="margin:8px 0 0"><span class="tier t2">T2</span> confirmed (400 + 2000 cycles). <span class="tier t1">T1</span> unconverged screening value (100 + 500 cycles, nominal ±18%): a rank, not a result. Uptake mol/kg at 298 K, 1 bar ± 1σ.</p>
   </section>
@@ -93,7 +94,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<
 const pct = (x) => (x == null ? "–" : `${Math.round(100 * x)}%`);
 const fx = (x, k = 2) => (x == null ? "–" : Number(x).toFixed(k));
 const short = (s) => (s || "").replace(/_clean$/, "");
-const LABEL = { random: "random", descriptor: "descriptor-ranked", uniform: "uniform tier-2", sieve: "SIEVE v3 (Nemotron)", "sieve-dsv4": "SIEVE v3 (DeepSeek-V4 planner)", "sieve-v4": "SIEVE v4 (sub-agents)", "sieve-v4-omni": "SIEVE v4 (Omni Nano roles)" };
+const LABEL = { random: "random", descriptor: "descriptor-ranked", uniform: "uniform tier-2", sieve: "SIEVE v3 (Nemotron)", "sieve-dsv4": "SIEVE v3 (DeepSeek-V4 planner)", "sieve-v4": "SIEVE v4 (sub-agents)", "sieve-v4-omni": "SIEVE v4 (Omni Nano roles)", "sieve-v5": "SIEVE v5 (upside-seeking)" };
 const lab = (a) => LABEL[a] || a;
 const STY = { random: { c: "#15171C", d: "2 3" }, descriptor: { c: "#7C828E", d: "7 4" }, uniform: { c: "#A9AEB7", d: "8 3 2 3" } };
 const SIEVE_C = ["#0B8A98", "#06525C", "#5FC3CD", "#2E6F8E"];
@@ -120,11 +121,14 @@ async function boot() {
     const budgets = Object.keys(cmp.arms[arms[0]].budgets).sort((p, q) => p - q);
     const b = budgets[budgets.length - 1], med = (a) => (cmp.arms[a].budgets[b] || {}).best_true_found?.median;
     const base = arms.filter((a) => !a.startsWith("sieve")), bestBase = base.sort((x, y) => (med(y) ?? -1) - (med(x) ?? -1))[0];
-    for (const a of arms.filter((x) => x.startsWith("sieve"))) {
-      const m = med(a), mb = med(bestBase);
-      if (m == null || mb == null) continue;
-      const win = m > mb + 1e-9;
-      v.push(`<div class="callout ${win ? "info" : "bad"}"><b>Arena, ${b} CPU-h: ${esc(lab(a))} ${win ? "beats" : "does not beat"} ${esc(lab(bestBase))}.</b> Median best true uptake found ${fx(m)} vs ${fx(mb)} mol/kg over ${cmp.arms[a].budgets[b].n} vs ${cmp.arms[bestBase].budgets[b].n} seeds (true best in the arena: ${fx(cmp.truth.top_value)}).</div>`);
+    // one callout for every SIEVE version, not one per version
+    const rows = arms.filter((x) => x.startsWith("sieve")).map((a) => ({ a, m: med(a), n: cmp.arms[a].budgets[b]?.n })).filter((r) => r.m != null);
+    const mb = med(bestBase);
+    if (rows.length && mb != null) {
+      const wins = rows.filter((r) => r.m > mb + 1e-9);
+      const li = rows.map((r) => `<li>${esc(lab(r.a))}: <b class="mono">${fx(r.m)}</b> <span class="dim">(${r.n} seeds)</span>${r.m > mb + 1e-9 ? " · beats it" : ""}</li>`).join("");
+      v.push(`<div class="callout ${wins.length ? "info" : "bad"}"><b>Arena, ${b} CPU-h: ${wins.length ? `${wins.length} of ${rows.length} SIEVE versions beat` : "no SIEVE version beats"} ${esc(lab(bestBase))}.</b>
+        Median best true uptake found, mol/kg; ${esc(lab(bestBase))} <b class="mono">${fx(mb)}</b> over ${cmp.arms[bestBase].budgets[b].n} seeds, true best in the arena ${fx(cmp.truth.top_value)}.<ul class="vlist">${li}</ul></div>`);
     }
   }
   $("verdicts").innerHTML = v.join("") || `<div class="callout">Not enough finished runs to compare yet.</div>`;

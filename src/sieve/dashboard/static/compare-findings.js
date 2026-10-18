@@ -42,8 +42,11 @@
       <td class="lbl2"><a href="/science?name=${encodeURIComponent(r.name)}">${r.label}</a><span class="role">${r.role}</span></td>
       <td class="num mono">${pm(r.p015)}</td><td class="num mono">${pm(r.p1)}</td><td class="num mono">${pm(r.selectivity, 1)}</td>
       <td class="num mono">${pm(r.wc_vsa)}</td><td class="num mono">${pm(r.wc_tsa)}</td><td class="num mono">${pm(r.qst, 1)}</td></tr>`).join("");
-    document.getElementById("fnd-same").innerHTML = `<thead>${head}</thead><tbody>${body}</tbody>`
-      + `<caption class="note" style="caption-side:bottom;text-align:left;padding-top:6px">Uptake and working capacity in mol/kg (= mmol/g), ± 1σ. VSA: 0.15 → 0.01 bar; TSA: 298 → 393 K at 0.15 bar. Selectivity from a 15:85 CO₂/N₂ mixture at 1 bar.</caption>`;
+    const tbl = document.getElementById("fnd-same");
+    tbl.innerHTML = `<thead>${head}</thead><tbody>${body}</tbody>`;
+    // the units note sits under the scroll box, not inside the (wider) table, so it wraps on narrow screens
+    if (!document.getElementById("fnd-same-note")) tbl.parentElement.insertAdjacentHTML("afterend",
+      `<p class="note" id="fnd-same-note" style="margin:6px 0 0">Uptake and working capacity in mol/kg (= mmol/g), ± 1σ. VSA: 0.15 → 0.01 bar; TSA: 298 → 393 K at 0.15 bar. Selectivity from a 15:85 CO₂/N₂ mixture at 1 bar.</p>`);
   }
 
   function lit(rows) {
