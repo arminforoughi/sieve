@@ -147,11 +147,13 @@ async def run(db_path: str, budget_cpu_s: float = 4 * 3600.0, n_workers: int | N
         ctx.round = st.con.execute("SELECT COALESCE(MAX(round_no), 0) FROM rounds WHERE run_id=?", (run_id,)).fetchone()[0] or 0
         st.event(run_id, "decision", {"text": f"{len(ctx.world.names):,} structures described; agents take over"},
                  agent_id="orchestrator")
+        stalled = 0
         while True:
             ctx.round += 1
             b = budget(ctx)
             if b["remaining_cpu_s"] <= max(MIN_ROUND_CPU, confirmation_reserve(ctx)) and ctx.round > 2:
                 break
+            spent_before = ctx.oracle.spent()
             plan = await orchestrate(ctx)
             if plan["call_scout"] or ctx.round == 1 or ctx.round % 4 == 1:
                 await scout(ctx)
@@ -168,6 +170,15 @@ async def run(db_path: str, budget_cpu_s: float = 4 * 3600.0, n_workers: int | N
                                                 "best": {"structure": lead[0]["structure"], "uptake": lead[0]["uptake"],
                                                          "tier": lead[0]["tier"]} if lead else None})
             if ctx.oracle.remaining() < MIN_ROUND_CPU:
+                break
+            # End-of-budget livelock guard: when every job the agents still want is refused by the
+            # budget (e.g. a tier-2 needing 190 s with 76 s left), a round spends nothing and the
+            # next one asks for the same job. Two rounds in a row without progress end the loop.
+            stalled = stalled + 1 if ctx.oracle.spent() - spent_before < 1.0 else 0
+            if stalled >= 2:
+                st.event(run_id, "decision", {"text": f"no affordable work left ({ctx.oracle.remaining():.0f} CPU-s "
+                                                      f"remaining, two rounds without progress): ending the search"},
+                         agent_id="orchestrator")
                 break
         for r in range(1, ctx.round + 1):  # let every straggler finish before the final decision
             await wait_round(ctx, ex, r)
