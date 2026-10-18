@@ -2,18 +2,20 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SIEVE · How to use</title>
+<title>SIEVE · Methods</title>
 <link rel="stylesheet" href="/static/shell.css">
 <style>
   .guide { max-width: 1100px; }
   .gg { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--gap); }
   @media (max-width: 900px) { .gg { grid-template-columns: minmax(0, 1fr); } }
-  .card p, .card li { font-size: 14px; line-height: 1.55; color: var(--ink); }
-  .card p { margin: 0 0 8px; } .card ul, .card ol { margin: 0 0 8px; padding-left: 20px; }
-  .card li { margin: 3px 0; }
+  .gg .card p, .gg .card li { font-size: 14px; line-height: 1.55; color: var(--ink); }
+  .gg .card p { margin: 0 0 8px; } .gg .card ul { margin: 0 0 8px; padding-left: 20px; }
+  .gg .card li { margin: 3px 0; }
   .full { grid-column: 1 / -1; }
   pre { background: var(--bg); border: 1px solid var(--grid); border-radius: 6px; padding: 10px 12px; font: 12.5px/1.6 var(--mono); overflow-x: auto; margin: 6px 0 10px; }
-  .pages dt { font-weight: 600; margin-top: 8px; } .pages dd { margin: 2px 0 0; color: var(--ink-2); font-size: 13.5px; }
+  .pages { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; margin: 0; font-size: 13.5px; }
+  .pages dt { font-weight: 600; } .pages dd { margin: 0; color: var(--ink-2); }
+  @media (max-width: 560px) { .pages { grid-template-columns: minmax(0, 1fr); } .pages dd { margin-bottom: 6px; } }
 </style>
 </head>
 <body>
@@ -21,61 +23,92 @@
 <script src="/static/shell.js"></script>
 <main class="page guide">
   <div class="page-head"><div>
-    <h1>What SIEVE is, and how to read it</h1>
-    <p class="lead">A short guide for a materials scientist who wants to know what these numbers are, how far to trust them, and how to reproduce them.</p>
+    <h1>Methods and caveats</h1>
+    <p class="lead">What the numbers are, how far to trust them, and how to reproduce them. The agent workflow itself is on <a href="/how">How it works</a>.</p>
   </div></div>
   <div class="gg">
     <section class="card full">
-      <h2>The question it answers</h2>
-      <p><b>Which metal–organic frameworks, out of 12,020 CoRE MOF structures, adsorb the most CO₂ at 298 K and 1 bar, in one fixed molecular model, on a budget of 4 CPU-hours?</b> An exhaustive screen at the cheapest useful fidelity would need roughly 220 CPU-hours, so most structures are never simulated. LLM agents (orchestrator, scout, allocator, critic, analyst) decide which structures to simulate and at which fidelity; three fixed-policy baselines (random, descriptor-ranked, uniform tier-2) get the same budget so the agents can be judged.</p>
-      <p>SIEVE <b>ranks</b> structures within its model. It does not predict laboratory uptake.</p>
+      <h2>The question</h2>
+      <p><b>Which CoRE MOF 2019 structures adsorb the most CO₂ at 298 K and 1 bar, in one fixed molecular model, on 4 CPU-hours?</b>
+        Of 12,020 structures, 8,803 pass the pore filter (PLD ≥ 3.3 Å). Simulating all of them even at the cheapest useful fidelity would take about 220 CPU-hours,
+        so most are never simulated. SIEVE <b>ranks</b> structures within its model; it does not predict laboratory uptake.</p>
     </section>
 
     <section class="card">
-      <h2>Reading tiers and error bars</h2>
+      <h2>Tiers and error bars</h2>
       <ul>
-        <li><span class="tier t0">T0</span> descriptors only (pore-limiting and largest cavity diameter, void fraction, density, metals). Costs seconds; no uptake.</li>
-        <li><span class="tier t1">T1</span> short GCMC (100 + 500 cycles at 1 bar). <b>Not converged</b>: nominal ±18%. Good for deciding what to look at next, never for naming a winner.</li>
-        <li><span class="tier t2">T2</span> confirmed GCMC (400 + 2000 cycles), nominal ±8.6%. A run may only recommend a structure that reached tier 2.</li>
+        <li><span class="tier t0">T0</span> descriptors only (pore sizes, void fraction, density, metals). Seconds; no uptake.</li>
+        <li><span class="tier t1">T1</span> short GCMC, 100 + 500 cycles. <b>Not converged</b> (nominal ±18%): it ranks, it never names a winner.</li>
+        <li><span class="tier t2">T2</span> confirmed GCMC, 400 + 2000 cycles (nominal ±8.6%). Only a tier-2 structure may be recommended.</li>
+        <li><span class="tier t3">T3</span> capture check, runs with the <b>capture objective</b> only, on tier-2-confirmed finalists: a 15:85 CO₂/N₂
+          mixture at 1 bar and pure CO₂ at 0.01 bar, 200 + 500 cycles each. It reports selectivity S, working capacity ΔN and APS (below).</li>
       </ul>
-      <p>Uptake is absolute loading in mol/kg (= mmol/g). The ± is one standard deviation from RASPA's block averages: it is the statistical noise of the simulation, not the error of the model. Two structures whose intervals overlap at tier 1 are not distinguishable.</p>
+      <p>Uptake is absolute loading in mol/kg (= mmol/g). The ± is one standard deviation from RASPA's block averages: simulation noise, not model error.
+        Overlapping tier-1 intervals are not distinguishable.</p>
     </section>
 
     <section class="card">
-      <h2>Limitations to keep in mind</h2>
+      <h2>Two objectives</h2>
       <ul>
-        <li><b>No framework charges.</b> The force field (UFF Lennard-Jones + TraPPE CO₂, Lorentz–Berthelot, 12.8 Å cutoff, shifted) has no electrostatics with the framework, so open metal sites and other polar binding sites are under-rated. Mg-MOF-74 comes out near 1.7 mol/kg here, against roughly 8 in experiment.</li>
-        <li>Rigid frameworks, pure CO₂, no water, no N₂ competition: selectivity and humid performance are not addressed.</li>
-        <li>The CoRE structures are taken as given (solvent removed, as curated); disorder and missing hydrogens are not repaired.</li>
-        <li>Budgeted search can miss the best structure. The arena on the Compare page measures how often each arm does.</li>
+        <li><b>uptake</b> (default): rank by CO₂ uptake at 298 K and 1 bar; the winner is the best tier-2-confirmed structure.</li>
+        <li><b>capture</b> (<code>--objective capture</code>): the same screen finds candidates, then the winner is the capture-checked structure with the
+          highest <b>APS = S(CO₂/N₂) × ΔN</b> (mol/kg), the adsorbent performance score of Chung et al., <i>Sci. Adv.</i> 2016:
+          S from the 15:85 mixture, ΔN = mixture CO₂ loading − pure-CO₂ loading at 0.01 bar (vacuum-swing desorption).
+          Phases: explore T1 → confirm T2 → capture check T3. Baselines end with the same capture check of their own top 3, so arms stay comparable.</li>
+        <li>Runs with different objectives answer different questions; <a href="/compare">Compare</a> shows each run's objective.</li>
       </ul>
     </section>
 
     <section class="card">
-      <h2>The pages</h2>
+      <h2>MOFs and zeolites</h2>
+      <p><code>--pool mixed</code> adds the IZA zeolite frameworks <span class="fam">zeolite</span> to the CoRE MOFs. Their pore descriptors (PLD, LCD, void fraction,
+        surface area) are computed by SIEVE on a distance grid with CoRE's definitions and radii; on 20 CoRE MOFs they match CoRE's Zeo++ values to
+        0.04 Å (LCD), 0.09 Å (PLD, calibrated out) and 0.005 (void fraction); surface area runs low. The zeolites are pure silica with no cations,
+        so this model treats them fairly only <b>geometrically</b>: real cation-exchanged zeolites (13X, 5A) bind CO₂ electrostatically.</p>
+    </section>
+
+    <section class="card">
+      <h2>Model limits</h2>
+      <ul>
+        <li><b>No framework charges.</b> UFF Lennard-Jones + TraPPE CO₂, Lorentz–Berthelot, 12.8 Å shifted cutoff. Open metal sites and polar pockets are under-rated:
+          Mg-MOF-74 comes out near 1.7 mol/kg here against about 8 measured.</li>
+        <li><b>Rigid frameworks, no water.</b> CO₂/N₂ selectivity is computed only for leads (15:85 mixture); humid performance is not addressed.</li>
+        <li><b>Disordered crystal files</b> <span class="dis">disordered</span>. Some cleaned CIFs keep one site twice, which can inflate binding. A disorder check flags them;
+          before a flagged structure can be recommended, the critic has it re-measured at tier 2 on a resolved copy (one atom of each overlapping pair removed).
+          The recommendation uses the resolved value; a drop of more than 15% is a <i>disorder artefact</i> and vetoes the original.</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>How SIEVE is judged</h2>
+      <ul>
+        <li>Three fixed-policy baselines (random, descriptor-ranked, uniform tier-2) get the same 4 CPU-hours.</li>
+        <li>A <b>referee</b> re-measures every arm's top 10 at tier 2 with new seeds; no AI is involved.</li>
+        <li>An <b>arena</b> of 300 structures, scored on the 292 with a converged tier-2 answer, replays each arm over many seeds.</li>
+        <li><b>Losses are reported.</b> When a baseline beats SIEVE, <a href="/compare">Compare</a> says so first, with live numbers.</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>Where to look</h2>
       <dl class="pages">
-        <dt><a href="/">Control room</a></dt><dd>A run as it happens: budget, worker slots, the current best, every event.</dd>
-        <dt><a href="/agents">Agents</a></dt><dd>What each agent said and decided, round by round, including critic vetoes.</dd>
-        <dt><a href="/discoveries">Discoveries</a></dt><dd>Leaderboard of every structure measured by GCMC, sortable, with descriptors and CSV export.</dd>
-        <dt><a href="/science">Science</a></dt><dd>One structure in depth: binding pockets, the 0.05–5 bar isotherm, the pocket-energy distribution, a side-by-side with HKUST-1 and Mg-MOF-74, a peer review of every claim, and downloads (CIF, isotherm CSV, energy cube, JSON). Any pool structure can be searched; uncomputed ones take minutes.</dd>
-        <dt><a href="/compare">Compare</a></dt><dd>Whether SIEVE beats the baselines, on the full pool and over many seeds on a 292-structure arena with known answers.</dd>
+        <dt><a href="/">Control room</a></dt><dd>A run as it happens: budget, workers, current best, events.</dd>
+        <dt><a href="/agents">Agents</a></dt><dd>What each agent said and decided; the Validation view shows every check.</dd>
+        <dt><a href="/discoveries">Discoveries</a></dt><dd>Every structure measured by GCMC, sortable, with CSV export.</dd>
+        <dt><a href="/science">Science</a></dt><dd>One structure in depth: pockets, isotherm, capture metrics, peer review, downloads.</dd>
+        <dt><a href="/compare">Compare</a></dt><dd>SIEVE against the baselines, the referee and standard capture materials.</dd>
       </dl>
     </section>
 
-    <section class="card">
-      <h2>Reproduce</h2>
-      <p>From the repository root, with the project's virtual environment:</p>
-<pre>python -m sieve sieve --budget-h 4             # the agent team
-python -m sieve baseline random --budget-h 4    # also: descriptor, uniform
-python -m sieve resume &lt;run_id&gt;               # continue a crashed run
-python -m sieve status [&lt;run_id&gt;]
-python -m sieve dashboard --port 8770           # this dashboard</pre>
-      <p>Everything a run does is recorded in <code>data/runs.db</code> (evaluations, tasks, events), so a run can be replayed (<code>dashboard --demo-replay &lt;run_id&gt;</code>) and audited. Science-page results are cached in <code>data/science/</code>.</p>
-    </section>
-
     <section class="card full">
-      <h2>Honest status</h2>
-      <p>On the full pool so far, a baseline (uniform tier-2) holds the best confirmed structure (ZADREE, about 9.6 mol/kg), above SIEVE's best confirmed one. Across arena seeds SIEVE does not yet beat random search on median best-found uptake. See <a href="/compare">Compare</a> for the current numbers; they update as runs finish.</p>
+      <h2>Reproduce</h2>
+<pre>uv run python -m sieve sieve --budget-h 4             # the agent team
+uv run python -m sieve sieve --arm sieve-v5 --objective capture --pool mixed   # flue-gas capture, MOFs + zeolites
+uv run python -m sieve baseline random --budget-h 4   # also: descriptor, uniform; --objective capture --pool mixed
+uv run python -m sieve resume &lt;run_id&gt;                # continue after a crash or kill -9
+uv run python -m sieve status [&lt;run_id&gt;]
+uv run python -m sieve dashboard --port 8770          # this dashboard; --demo-replay &lt;run_id&gt; replays a run</pre>
+      <p>Every evaluation, task and event is recorded in <code>data/runs.db</code>, so any run can be replayed and audited. Science-page results are cached in <code>data/science/</code>.</p>
     </section>
   </div>
 </main>

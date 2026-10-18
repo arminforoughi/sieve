@@ -11,7 +11,7 @@
     ["discoveries", "/discoveries", "Discoveries"],
     ["science", "/science", "Science"],
     ["compare", "/compare", "Compare"],
-    ["guide", "/guide", "How to use"],
+    ["guide", "/guide", "Methods"],
   ];
   const RUN_PAGES = new Set(["workflow", "room", "agents", "discoveries"]);
   const host = document.querySelector("header.shell");
