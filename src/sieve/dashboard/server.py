@@ -359,8 +359,8 @@ def verdict(con: sqlite3.Connection, run_id: str, T: float) -> dict | None:
     ranked = sorted(truth, key=truth.get, reverse=True) if truth else []
     rows = []
     for arm in ARMS:
-        r = con.execute("SELECT run_id FROM runs WHERE arm=? AND status='finished' AND finished_at<=? "
-                        "ORDER BY (run_id=?) DESC, created_at DESC LIMIT 1", (arm, T, run_id)).fetchone()
+        r = con.execute("SELECT run_id FROM runs WHERE (arm=? OR (?='sieve' AND arm LIKE 'sieve-%')) AND status='finished' "
+                        "AND finished_at<=? ORDER BY (run_id=?) DESC, created_at DESC LIMIT 1", (arm, arm, T, run_id)).fetchone()
         if not r:
             continue
         rec = con.execute("SELECT payload_json FROM events WHERE run_id=? AND type='recommend' "

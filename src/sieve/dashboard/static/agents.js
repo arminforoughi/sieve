@@ -21,7 +21,7 @@ const WORKER_Y = 530, POOL = { x0: 40, x1: 320, y0: 395, y1: 480 };
 const SLOTS = { orchestrator: { x: 565, y: 18, w: 330, h: 104 }, scout: { x: 14, y: 300, w: 290, h: 84 },
   allocator: { x: 690, y: 300, w: 300, h: 104 }, critic: { x: 360, y: 395, w: 290, h: 86 } };
 const S = { sats: {}, satCount: {}, bubbles: {}, run: null, speed: 1, workers: {}, nodes: {}, edges: {}, best: -1, measured: {}, vetoed: {}, rounds: {}, curRound: null,
-  capture: {}, checks: {}, flags: {}, families: null, phase: null, rec: null, lastText: {},
+  capture: {}, checks: {}, flags: {}, artifact: {}, families: null, phase: null, rec: null, lastText: {},
   queue: [], busy: false, poolPts: [], poolByName: {}, live: false, lastToast: 0 };
 
 // ------------------------------------------------------------------------------------ stage
@@ -269,7 +269,7 @@ function act(e, animate) {
     case "phase": S.phase = p; break;
     case "capture_required": case "disorder_check_required": case "disorder_artifact": case "disorder_passed":
       S.checks[e.type] = (S.checks[e.type] || 0) + 1;
-      if (e.type === "disorder_artifact") S.vetoed[p.structure] = p.text || "disorder artifact";
+      if (e.type === "disorder_artifact") S.artifact[p.structure] = p.text || "disorder artifact";
       if (animate) bubble("critic", p.text || e.type.replace(/_/g, " "), e.type === "disorder_passed" ? "" : "veto");
       chat(e);
       break;
@@ -337,8 +337,9 @@ function renderBoard() {
   const prev = new Set(boardKeys.split(",")); boardKeys = key;
   $("board").innerHTML = top.map(([s, m], i) => {
     const c = S.capture[s] || S.capture[s.replace(/_clean$/, "_dres_clean")];
-    const tag = S.vetoed[s] ? `<span class="tag veto">VETOED</span>` : c ? `<span class="tag t3" title="capture check: S ${c.S == null ? "–" : (+c.S).toFixed(1)}, ΔN ${f3(c.dn)} mol/kg">APS ${f3(c.aps)}</span>`
-      : m[2] === 2 ? `<span class="tag ok">CONFIRMED</span>` : `<span class="tag">tier 1</span>`;
+    // a tier-2 confirmation lifts a "tier-1 only" veto; a disorder artifact stays vetoed
+    const tag = S.artifact[s] ? `<span class="tag veto" title="${esc(S.artifact[s])}">ARTIFACT</span>` : c ? `<span class="tag t3" title="capture check: S ${c.S == null ? "–" : (+c.S).toFixed(1)}, ΔN ${f3(c.dn)} mol/kg">APS ${f3(c.aps)}</span>`
+      : m[2] === 2 ? `<span class="tag ok">CONFIRMED</span>` : S.vetoed[s] ? `<span class="tag veto">VETOED</span>` : `<span class="tag">tier 1</span>`;
     const fl = S.flags[s] || {};
     const badges = (window.Shell ? Shell.fam(s) + Shell.dis(fl.dis) : "");
     return `<li class="${prev.has(s + m[2] + (S.vetoed[s] ? "v" : "")) ? "" : "new"}"><span class="n">${i + 1}</span><span class="s" title="${esc(s)}">${esc(name(s))} ${badges}</span><span class="u">${f3(m[0])}</span>${tag}</li>`;
@@ -400,7 +401,7 @@ function renderFlow(f) {
   const famN = S.families ? Object.values(S.families) : null;
   const sf = [...(S.subFams || [])], fz = sf.filter((x) => x.startsWith("z")).length;
   const famTxt = famN ? `${famN.filter((x) => x.class !== "zeolite").length} MOF${famN.some((x) => x.class === "zeolite") ? ` + ${famN.filter((x) => x.class === "zeolite").length} zeolite` : ""} families`
-    : sf.length ? `${sf.length - fz} MOF${fz ? ` + ${fz} zeolite` : ""} families scouted` : "families not scouted yet";
+    : sf.length ? `${sf.length - fz} MOF${fz ? ` + ${fz} zeolite` : ""} families scouted` : f.run.finished ? "family report not in view" : "families not scouted yet";
   const caps = Object.entries(S.capture).sort((a, b) => (b[1].aps ?? -1e9) - (a[1].aps ?? -1e9));
   const ck = S.checks, rec = S.rec;
   const lanes = [
