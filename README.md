@@ -162,8 +162,9 @@ referee.
 
 - **Highest uptake:** SIEVE did not find the highest-uptake structure. On the 300-structure arena
   benchmark it does not yet beat random search (median winner 4.6 vs 5.2 mol/kg at 1 CPU-h).
-- **Clean files:** the three structures above SIEVE's pick all have broken crystal files, and
-  disorder-resolved re-measurements are in progress.
+- **Clean files:** the three structures above SIEVE's pick all have broken crystal files. ZADREE
+  re-measured on a corrected file still holds 9.82 ± 0.12 mol/kg at 1 bar (5.98 at 0.15 bar,
+  down 14%), so it stays the best structure found. Ranks 2 and 3 are not yet re-measured.
 - **More detail:** the comparison with MEA, 13X, HKUST-1 and Mg-MOF-74, and why it matters, is in
   [docs/OVERVIEW.md](docs/OVERVIEW.md#9-what-we-found-compared-with-standard-capture-materials).
 

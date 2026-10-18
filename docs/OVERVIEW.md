@@ -294,11 +294,17 @@ regenerate.
 1. **The model is not the lab.** With no framework charges, the model puts Mg-MOF-74 at 1.7 mol/kg
    against ~8 in experiment. Comparing a simulated 9.4 with a measured 8 compares two different
    things. Only the same-model table above is a fair comparison.
-2. **ZADREE's crystal file is disordered.** All 32 of its nitrogen atoms sit 0.45 Å from an oxygen
-   atom: one site recorded both ways, kept twice. The doubled atoms line exactly the Cu pockets where
-   CO₂ binds, and could explain its unusually deep −18.9 kJ/mol well. A corrected copy is being
-   re-simulated now. The same applies to ranks 2 and 3.
-3. **No pore blocking yet** (in progress). The model can fill pockets CO₂ cannot reach.
+2. **ZADREE's crystal file is disordered, but that is not why it ranks first.** All 32 of its
+   nitrogen atoms sit 0.45 Å from an oxygen atom: one site recorded both ways, kept twice. We
+   re-simulated a corrected copy with one atom per site:
+   - **1 bar:** 9.82 ± 0.12 mol/kg, against 9.41 originally, so slightly higher.
+   - **0.15 bar:** 5.98 ± 0.11 mol/kg, against 6.97, so 14% lower.
+
+   The doubled atoms added some strong binding at low pressure and took up a little pore space at
+   high pressure, but ZADREE stays the best structure found either way. Ranks 2, 3 and 5 are also
+   disordered and not yet re-measured.
+3. **Pore blocking** is now applied on the Science page and is opt-in for screening runs. Full runs
+   so far did not use it.
 4. **Rigid frameworks, dry gas.** Real flue gas is humid, and water is what kills most MOFs and 13X
    in practice.
 5. **It is a published compound** (CSD refcode ZADREE). Someone may already have measured it, so the
