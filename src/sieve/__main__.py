@@ -1,6 +1,8 @@
 """python -m sieve <command>
 
   baseline <random|descriptor|uniform> [--budget-h 4] [--workers N] [--seed 0] [--limit N]
+           [--objective uptake|capture] [--pool mof|mixed]
+  sieve [--arm sieve-v5] [--objective uptake|capture] [--pool mof|mixed] [--limit N]
   resume <run_id>          continue a run from its last committed state
   status [run_id]          budget, rounds, evaluations by tier, timeouts
   dashboard [--port 8770] [--demo-replay RUN_ID]
@@ -30,7 +32,7 @@ def cmd_baseline(a) -> None:
     model = _cost_model(a.calibration)
     print(f"cost model: {model}")
     run_id = run_arm(a.arm, a.db, a.budget_h * 3600.0, a.workers, a.seed, cost_model=model,
-                     limit=a.limit, run_id=a.run_id)
+                     limit=a.limit, run_id=a.run_id, objective=a.objective, pool_kind=a.pool)
     print(f"finished {run_id}")
     cmd_status(argparse.Namespace(db=a.db, run_id=run_id))
 
@@ -68,10 +70,21 @@ def cmd_status(a) -> None:
         best = sorted(s.estimates.values(), key=lambda e: e.uptake, reverse=True)[:5]
         print(f"{rid}  [{s.arm}, {s.status}]  spent {s.spent_cpu_s / 3600:.3f} / "
               f"{s.budget_cpu_s / 3600:.2f} CPU-h  rounds {s.last_completed_round + 1}  "
-              f"evals t0/t1/t2 {by_tier.get(0, 0)}/{by_tier.get(1, 0)}/{by_tier.get(2, 0)}  "
+              f"evals t0/t1/t2 {by_tier.get(0, 0)}/{by_tier.get(1, 0)}/{by_tier.get(2, 0)}"
+              + (f"/t3 {by_tier[3]}" if by_tier.get(3) else "") + "  "
               f"timeouts {n_to}")
         for e in best:
             print(f"    {e.structure:40s} {e.uptake:7.3f} +/- {e.err:.3f} mol/kg  (tier {e.tier})")
+        if by_tier.get(3):
+            from sieve.capture import estimates as cap_est
+            for s_, c in sorted(cap_est(st.con, rid).items(), key=lambda kv: -kv[1]["aps"]):
+                print(f"    {s_:40s} APS {c['aps']:7.3f} +/- {c['aps_err']:.3f}  S {c['S']:.1f}  "
+                      f"dN {c['dn']:.3f} mol/kg  (tier 3)")
+        rec = st.con.execute("SELECT payload_json FROM events WHERE run_id=? AND type='recommend' "
+                             "ORDER BY event_id DESC LIMIT 1", (rid,)).fetchone()
+        if rec:
+            import json as _json
+            print(f"    recommended: {_json.loads(rec[0]).get('structure')}")
 
 
 def cmd_sieve(a) -> None:
@@ -81,7 +94,9 @@ def cmd_sieve(a) -> None:
 
     model = _cost_model(a.calibration)
     run_id = run_sync(a.db, a.budget_h * 3600.0, a.workers, a.seed, run_id=a.run_id, cost_model=model,
-                      arm=a.arm, models=VARIANTS.get(a.arm), policy=POLICIES.get(a.arm))
+                      arm=a.arm, models=VARIANTS.get(a.arm), policy=POLICIES.get(a.arm),
+                      objective=a.objective, pool_kind=a.pool, limit=a.limit,
+                      disorder_check=False if a.no_disorder_check else None)
     print(f"finished {run_id}")
     cmd_status(argparse.Namespace(db=a.db, run_id=run_id))
 
@@ -106,6 +121,9 @@ def main() -> None:
     b.add_argument("--limit", type=int, default=None, help="screen a random subset (smoke runs)")
     b.add_argument("--run-id", default=None)
     b.add_argument("--calibration", default=None, help="DB to fit the shared cost model from")
+    b.add_argument("--objective", choices=["uptake", "capture"], default="uptake",
+                   help="capture: end with the same tier-3 capture check of the top 3 as SIEVE, rank by APS")
+    b.add_argument("--pool", choices=["mof", "mixed"], default="mof", help="mixed: CoRE MOFs + IZA zeolites")
     b.set_defaults(fn=cmd_baseline)
     sv = sub.add_parser("sieve", help="run the agent team")
     sv.add_argument("--budget-h", type=float, default=4.0)
@@ -114,6 +132,12 @@ def main() -> None:
     sv.add_argument("--run-id", default=None)
     sv.add_argument("--calibration", default=None)
     sv.add_argument("--arm", default="sieve", help="agent variant: sieve, sieve-v5, sieve-dsv4, ... (see arena_eval)")
+    sv.add_argument("--objective", choices=["uptake", "capture"], default="uptake",
+                    help="capture: tier-3 capture checks, recommend by APS = S(CO2/N2) x dN")
+    sv.add_argument("--pool", choices=["mof", "mixed"], default="mof", help="mixed: CoRE MOFs + IZA zeolites")
+    sv.add_argument("--limit", type=int, default=None, help="screen a random (family-stratified) subset (smoke runs)")
+    sv.add_argument("--no-disorder-check", action="store_true",
+                    help="do not re-measure disordered finalists on their resolved CIFs")
     sv.set_defaults(fn=cmd_sieve)
     r = sub.add_parser("resume")
     r.add_argument("run_id")

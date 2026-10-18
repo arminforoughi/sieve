@@ -90,6 +90,9 @@ class CostModel:
     grid_mc_k: float = 4.4e-4   # per move
     uptake_prior: float = 1.5   # mol/kg, used to predict N before a structure is first measured
     n_fits: int = 0
+    # tier 3 (capture check, sieve/capture.py): binary CO2/N2 GCMC, direct, per (move x atom).
+    # ~2.6x a pure-CO2 direct move (swap + identity-change moves); 5 science runs: 2.2-3.1e-6.
+    mix_k: float = 2.9e-6
 
     @staticmethod
     def molecules(desc: "Descriptors", uptake_molkg: float) -> float:
@@ -570,10 +573,11 @@ class Oracle:
         prior = CostModel()
         where = "tier>0 AND status='ok'" + (" AND run_id=?" if run_only else "")
         args = (self.run_id,) if run_only else ()
-        d, g, m, u = [], [], [], []
-        for rj, up in self.con.execute(f"SELECT result_json, uptake_molkg FROM evaluations "
-                                       f"WHERE {where}", args):
-            u.append(up)
+        d, g, m, u, x = [], [], [], [], []
+        for rj, up, tier in self.con.execute(f"SELECT result_json, uptake_molkg, tier FROM evaluations "
+                                             f"WHERE {where}", args):
+            if tier in (1, 2):  # tier 3 (capture check) has no 1-bar uptake
+                u.append(up)
             for p in json.loads(rj or "{}").get("phases", []):
                 if p.get("status") != "ok":
                     continue
@@ -581,11 +585,13 @@ class Oracle:
                     d.append((p["cpu_s"] - prior.direct_a) / (p["moves"] * p["n_atoms_sim"]))
                 elif p["kind"] == "makegrid":
                     g.append(p["cpu_s"] / (p["grid_points"] * p["n_atoms_sim"] * p["grid_types"]))
+                elif p["kind"] == "mc_mixture" and p.get("moves"):
+                    x.append((p["cpu_s"] - prior.direct_a) / (p["moves"] * p["n_atoms_sim"]))
                 elif p["kind"] == "mc_grid" and p.get("moves"):
                     m.append((p["cpu_s"] - prior.grid_mc_a) / p["moves"])
         med = lambda xs, default: sorted(xs)[len(xs) // 2] if len(xs) >= 3 else default  # noqa: E731
         return CostModel(direct_k=med(d, prior.direct_k), grid_g=med(g, prior.grid_g),
-                         grid_mc_k=med(m, prior.grid_mc_k), uptake_prior=med(u, prior.uptake_prior),
+                         grid_mc_k=med(m, prior.grid_mc_k), uptake_prior=med(u, prior.uptake_prior), mix_k=med(x, prior.mix_k),
                          n_fits=len(d) + len(g) + len(m))
 
     def framework_name(self, desc: Descriptors) -> str:
@@ -600,7 +606,7 @@ class Oracle:
     def known_uptake(self, structure: str) -> float | None:
         """This structure's best existing GCMC estimate (any run in this DB), for cost planning."""
         row = self.con.execute(
-            "SELECT uptake_molkg FROM evaluations WHERE structure=? AND status='ok' AND tier>0 "
+            "SELECT uptake_molkg FROM evaluations WHERE structure=? AND status='ok' AND tier IN (1, 2) "
             "ORDER BY tier DESC, finished_at DESC LIMIT 1", (structure,)).fetchone()
         return None if row is None else float(row[0])
 

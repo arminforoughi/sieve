@@ -94,16 +94,29 @@ def run_task(st: Store, o: Oracle, cfg: WorkerConfig, worker_id: str, task) -> N
             st.event(cfg.run_id, "task_error", {"task": tid, "structure": s, "tier": tier,
                                                 "error": desc.error}, agent_id=worker_id)
             return
-        plan = o.plan(desc, tier, task["mode"], cfg.cost_model)
-        if o.remaining() < plan.est_cpu_s:
-            raise BudgetExhausted(f"{s} tier {tier}: needs ~{plan.est_cpu_s:.0f}s, "
-                                  f"{o.remaining():.0f}s left")
-        st.event(cfg.run_id, "task_start", {
-            "task": tid, "structure": s, "tier": tier, "mode": plan.mode,
-            "est_cpu_s": round(plan.est_cpu_s, 1), "build_grid": plan.build_grid,
-            "limit_cpu_s": round(o.cpu_limit(plan, tier), 1),
-            "n_atoms_sim": desc.n_atoms_sim}, agent_id=worker_id)
-        ev = o.simulate(desc, tier, task["mode"], worker_id=worker_id, cost_model=cfg.cost_model)
+        if tier == 3:  # capture check: binary CO2/N2 + 0.01 bar desorption (sieve/capture.py)
+            from sieve import capture
+            # a disorder-resolved variant has no 1-bar result of its own yet: plan from the original's
+            hint = o.known_uptake(s) or o.known_uptake(s.replace("_dres", ""))
+            cp = capture.plan(o, desc, cfg.cost_model, hint)
+            if o.remaining() < cp.est_cpu_s:
+                raise BudgetExhausted(f"{s} tier 3: needs ~{cp.est_cpu_s:.0f}s, {o.remaining():.0f}s left")
+            st.event(cfg.run_id, "task_start", {
+                "task": tid, "structure": s, "tier": 3, "mode": "capture", "est_cpu_s": round(cp.est_cpu_s, 1),
+                "build_grid": False, "limit_cpu_s": round(capture.cpu_limit(o, cp), 1),
+                "n_atoms_sim": desc.n_atoms_sim}, agent_id=worker_id)
+            ev = capture.run(o, desc, worker_id=worker_id, cost_model=cfg.cost_model, uptake_hint=hint)
+        else:
+            plan = o.plan(desc, tier, task["mode"], cfg.cost_model)
+            if o.remaining() < plan.est_cpu_s:
+                raise BudgetExhausted(f"{s} tier {tier}: needs ~{plan.est_cpu_s:.0f}s, "
+                                      f"{o.remaining():.0f}s left")
+            st.event(cfg.run_id, "task_start", {
+                "task": tid, "structure": s, "tier": tier, "mode": plan.mode,
+                "est_cpu_s": round(plan.est_cpu_s, 1), "build_grid": plan.build_grid,
+                "limit_cpu_s": round(o.cpu_limit(plan, tier), 1),
+                "n_atoms_sim": desc.n_atoms_sim}, agent_id=worker_id)
+            ev = o.simulate(desc, tier, task["mode"], worker_id=worker_id, cost_model=cfg.cost_model)
     except BudgetExhausted as e:
         st.finish_task(tid, "skipped", None)
         st.event(cfg.run_id, "budget_refused", {"task": tid, "structure": s, "tier": tier,
@@ -123,7 +136,11 @@ def run_task(st: Store, o: Oracle, cfg: WorkerConfig, worker_id: str, task) -> N
     payload = {"task": tid, "eval_id": ev.eval_id, "structure": s, "tier": tier,
                "mode": ev.mode, "cpu_s": round(ev.cpu_s, 1), "est_cpu_s": round(ev.est_cpu_s, 1),
                "n_atoms_sim": desc.n_atoms_sim}
-    if ev.status == "ok":
+    if ev.status == "ok" and tier == 3:
+        from sieve.capture import brief
+        st.event(cfg.run_id, "task_done", {**payload, **(brief(ev.result.get("capture")) or {})},
+                 agent_id=worker_id)
+    elif ev.status == "ok":
         st.event(cfg.run_id, "task_done", {**payload, "uptake": ev.uptake_molkg,
                                            "err": ev.uptake_err}, agent_id=worker_id)
     elif ev.status == "timeout":

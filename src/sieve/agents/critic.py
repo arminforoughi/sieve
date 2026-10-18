@@ -86,7 +86,12 @@ async def critique(ctx: Ctx) -> None:
                         "the error bars actually separate the leaders, and veto calling anything a winner without "
                         "tier-2 confirmation. Confirmation is scheduled after the exploration phase, so early on "
                         "flag rather than force. If sub-critic verdicts are given, use them to choose what to "
-                        "confirm. Look for timeout patterns (very large cells) and set a cap if they waste budget.",
+                        "confirm. Look for timeout patterns (very large cells) and set a cap if they waste budget."
+                        + (" Finalist checks are enforced in code after your audit: a disordered leader "
+                           "(disordered=true) is re-measured on its resolved CIF before it can be recommended."
+                           if ctx.disorder_check else "")
+                        + (" Under the capture objective nothing can be recommended without a tier-3 capture check;"
+                           " say in notes which confirmed leaders most deserve one." if ctx.objective == "capture" else ""),
                         {"top10": lead, "tier1_only_in_top10": auto, "sub_critic_verdicts": verdicts,
                          "recent_timeouts": recent_timeouts(ctx), "budget": budget(ctx),
                          "current_cap_atoms_sim": ctx.cap_atoms,
@@ -106,4 +111,13 @@ async def critique(ctx: Ctx) -> None:
         ctx.cap_atoms = out["cap_atoms_sim"]
         ctx.st.event(ctx.run_id, "decision", {"text": f"critic caps simulated cell size at {ctx.cap_atoms} atoms "
                                                       f"after repeated timeouts"}, agent_id="critic")
+    # finalist checks, enforced in code: disorder re-measure, capture check (capture objective)
+    from sieve import capture
+    from sieve.agents import checks
+    if ctx.disorder_check or ctx.objective == "capture":
+        est = measured_estimates(ctx.st, ctx.run_id)
+        cap = capture.estimates(ctx.st.con, ctx.run_id) if ctx.objective == "capture" else {}
+        jobs = checks.audit(ctx, est, cap) if not explore_phase(ctx) else []
+        have = {(j["structure"], j["tier"]) for j in ctx.force_checks}
+        ctx.force_checks += [j for j in jobs if (j["structure"], j["tier"]) not in have]
     ctx.critic_notes = out.get("_text", "")

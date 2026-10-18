@@ -20,6 +20,7 @@ from sieve.oracle import CostModel, Descriptors, Oracle
 from sieve.store import Store, estimates_from_evaluations
 
 FEATURES = ("LCD", "PLD", "AV_VF", "ASA_m2_g")
+FAMILY_WEIGHT = 2.0   # the zeolite indicator, in standard deviations of the descriptor features
 
 
 @dataclass
@@ -30,6 +31,14 @@ class World:
     oms: np.ndarray                  # 1 if open metal sites
     metals: list[list[str]]
     idx: dict[str, int] = field(default_factory=dict)
+    zeo: np.ndarray | None = None    # 1 for an IZA zeolite, 0 for a CoRE MOF
+
+    def family_of(self, s: str) -> str:
+        return "zeolite" if self.zeo is not None and self.zeo[self.idx[s]] else "MOF"
+
+    @property
+    def mixed(self) -> bool:
+        return self.zeo is not None and bool(self.zeo.any())
 
     @classmethod
     def load(cls, st: Store, run_id: str) -> "World":
@@ -44,9 +53,14 @@ class World:
         raw[:, 3] = np.log1p(raw[:, 3])                       # surface area: log scale
         mu, sd = raw.mean(0), raw.std(0) + 1e-9
         X = (raw - mu) / sd
+        # material class as a feature: zeolites and MOFs on one descriptor scale, but a zeolite's
+        # nearest neighbours are zeolites first. All zero in a MOF-only pool (no effect there).
+        zeo = np.array([1.0 if (desc[n].core.get("family") == "zeolite" or n.startswith("IZA-")) else 0.0
+                        for n in names])
+        X = np.column_stack([X, FAMILY_WEIGHT * zeo]) if len(names) else X
         oms = np.array([1.0 if (desc[n].core.get("Has_OMS") or "").lower().startswith("y") else 0.0
                         for n in names])
-        w = cls(names, desc, X, oms, [desc[n].metals for n in names])
+        w = cls(names, desc, X, oms, [desc[n].metals for n in names], zeo=zeo)
         w.idx = {n: i for i, n in enumerate(names)}
         return w
 
@@ -87,10 +101,17 @@ class World:
     def card(self, s: str) -> dict:
         d = self.desc[s]
         c = d.core
-        return {"structure": s, "LCD": round(c["LCD"], 2), "PLD": round(c["PLD"], 2),
-                "void": round(c["AV_VF"], 3), "area_m2g": round(c["ASA_m2_g"]),
-                "open_metal": (c.get("Has_OMS") or "").lower().startswith("y"),
-                "metals": d.metals[:3], "atoms_sim": d.n_atoms_sim}
+        out = {"structure": s, "LCD": round(c["LCD"], 2), "PLD": round(c["PLD"], 2),
+               "void": round(c["AV_VF"], 3), "area_m2g": round(c["ASA_m2_g"]),
+               "open_metal": (c.get("Has_OMS") or "").lower().startswith("y"),
+               "metals": d.metals[:3], "atoms_sim": d.n_atoms_sim}
+        if self.mixed:
+            out["material_class"] = self.family_of(s)
+        from sieve.agents.checks import disorder_info
+        di = disorder_info(s, lazy=False)
+        if di.get("disordered"):
+            out.update(disordered=True, clash_atom_fraction=di.get("clash_atom_fraction"))
+        return out
 
 
 def measured_estimates(st: Store, run_id: str) -> dict:
@@ -111,7 +132,8 @@ def describe_pool(w: World) -> dict:
             metals[m] = metals.get(m, 0) + 1
     top_metals = sorted(metals.items(), key=lambda kv: -kv[1])[:12]
     q = lambda a: [round(float(np.percentile(a, p)), 2) for p in (10, 50, 90)]  # noqa: E731
-    return {"n": len(w.names), "LCD_p10_p50_p90": q(lcd), "void_p10_p50_p90": q(vf),
+    return {"n": len(w.names), **({"n_zeolites": int(w.zeo.sum())} if w.mixed else {}),
+            "LCD_p10_p50_p90": q(lcd), "void_p10_p50_p90": q(vf),
             "open_metal_fraction": round(float(w.oms.mean()), 3), "common_metals": top_metals}
 
 

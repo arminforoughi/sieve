@@ -107,7 +107,7 @@ def evidence_pack(name: str, analyst: dict | None) -> dict:
     typ = brief(d) if typ_name and typ_name != name and (d := science.cached(typ_name)) else None
     best = brief(d) if name != POOL_BEST and (d := science.cached(POOL_BEST)) else None
     runs = Store(PROJECT_ROOT / "data" / "runs.db")
-    row = runs.con.execute("SELECT run_id FROM evaluations WHERE structure=? AND status='ok' AND tier>0 "
+    row = runs.con.execute("SELECT run_id FROM evaluations WHERE structure=? AND status='ok' AND tier IN (1, 2) "
                            "ORDER BY tier DESC LIMIT 1", (name,)).fetchone()
     dos = dossier(runs, row[0], name, pool_percentiles()) if row else {}
     trail = [json.loads(p).get("text", "")[:200] for (p,) in runs.con.execute(

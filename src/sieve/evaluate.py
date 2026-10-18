@@ -96,7 +96,7 @@ def score_run(con: sqlite3.Connection, run_id: str, truth: Truth) -> RunScore:
     measured: dict[str, dict[int, list[tuple[float, float]]]] = {}
     for _, s, tier, status, cpu, u, e, fin in rows:
         spent += cpu or 0.0
-        if tier == 0 or status != "ok":
+        if tier not in (1, 2) or status != "ok":  # tier 3 (capture check) measures APS, not uptake
             if sc.points:  # spending without new information still moves along the x-axis
                 sc.points.append(Point(spent / 3600, *[getattr(sc.points[-1], f) for f in
                                                        ("best_true_found", "recommended",

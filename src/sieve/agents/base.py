@@ -67,6 +67,13 @@ class Ctx:
     # search policy knobs (v5): {"upside": bool, "random_frac": float, "promise_floor": float}
     policy: dict = field(default_factory=dict)
     random_debt: float = 0.0
+    # run config (stored in runs.config_json, restored on resume)
+    objective: str = "uptake"                          # uptake | capture (sieve/capture.py)
+    mixed: bool = False                                # pool holds IZA zeolites as well as CoRE MOFs
+    disorder_check: bool = False                       # re-measure disordered finalists on resolved CIFs
+    force_checks: list = field(default_factory=list)   # critic: funnel jobs (disorder re-measure, tier 3)
+    required: dict = field(default_factory=dict)       # checks the critic already announced
+    last_phase: str | None = None
 
 
 # --------------------------------------------------------------------------------- one step
@@ -81,6 +88,8 @@ async def step(ctx: Ctx, role: str, task: str, extra: str, user: dict, fallback,
     if aid != role:
         ctx.st.upsert_agent(ctx.run_id, aid, role, model=model, parent_id=parent, state="working")
     ctx.st.set_agent_state(aid, "working")
+    from sieve.agents.checks import notes
+    extra = f"{extra} {notes(ctx, disorder=role.split('/')[0] in ('critic', 'scout', 'allocator'))}".strip()
     ctx.st.event(ctx.run_id, "agent_start", {"role": role, "model": model, "text": task, "round": ctx.round,
                                              "depth": aid.count("/")}, agent_id=aid, parent_id=parent)
     try:
@@ -132,10 +141,31 @@ async def delegate(ctx: Ctx, parent_id: str, children: list[dict]) -> list[dict]
 # ------------------------------------------------------------------------------------ state
 
 def leaders(ctx: Ctx, n: int = 12) -> list[dict]:
+    """Top pool structures by measured 1-bar uptake (disorder-resolved re-measures are checks of
+    their original, not candidates). Adds the disorder flag and capture result when they apply."""
+    from sieve import capture, pool
+    from sieve.agents import checks
+
     est = measured_estimates(ctx.st, ctx.run_id)
-    top = sorted(est.values(), key=lambda e: e.uptake, reverse=True)[:n]
-    return [{"structure": e.structure, "tier": e.tier, "uptake": round(e.uptake, 3), "err": round(e.err, 3),
-             "n_meas": e.n_evals, "vetoed": ctx.vetoed.get(e.structure)} for e in top]
+    top = sorted((e for e in est.values() if not pool.is_resolved(e.structure)), key=lambda e: e.uptake,
+                 reverse=True)[:n]
+    cap = capture.estimates(ctx.st.con, ctx.run_id) if ctx.objective == "capture" else {}
+    out = []
+    for e in top:
+        row = {"structure": e.structure, "tier": e.tier, "uptake": round(e.uptake, 3), "err": round(e.err, 3),
+               "n_meas": e.n_evals, "vetoed": ctx.vetoed.get(e.structure)}
+        if ctx.disorder_check and checks.is_disordered(e.structure):
+            v = checks.disorder_verdict(ctx, e.structure, est)
+            row["disorder"] = v["status"]
+            if "resolved" in v:
+                row["uptake_resolved"] = round(v["resolved"], 3)
+        if ctx.objective == "capture":
+            c = checks.capture_of(ctx, e.structure, cap)
+            if c:
+                row["aps"] = round(c["aps"], 3)
+                row["selectivity"] = round(c["S"], 2) if c.get("S") is not None else None
+        out.append(row)
+    return out
 
 
 def budget(ctx: Ctx) -> dict:
@@ -145,8 +175,8 @@ def budget(ctx: Ctx) -> dict:
 
 
 def explore_phase(ctx: Ctx) -> bool:
-    b = budget(ctx)
-    return b["spent_cpu_s"] < EXPLORE_UNTIL * b["total_cpu_s"]
+    from sieve.agents.checks import phase
+    return phase(ctx) == "explore"
 
 
 def counts(ctx: Ctx) -> dict:

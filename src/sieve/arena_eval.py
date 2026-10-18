@@ -38,7 +38,7 @@ def _ok_rows(db: Path):
         return []
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     return con.execute("SELECT run_id, structure, tier, uptake_molkg, uptake_err, cpu_s, est_cpu_s, "
-                       "result_json FROM evaluations WHERE status='ok' AND tier>0 AND "
+                       "result_json FROM evaluations WHERE status='ok' AND tier IN (1, 2) AND "
                        "mode NOT LIKE 'replay%'").fetchall()
 
 

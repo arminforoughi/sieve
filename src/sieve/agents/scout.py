@@ -43,7 +43,20 @@ def family_card(ctx: Ctx, fid: str, members: list[int]) -> dict:
         for m in w.metals[i]:
             metals[m] = metals.get(m, 0) + 1
     meas = sorted([(est[w.names[i]].uptake, w.names[i]) for i in members if w.names[i] in est], reverse=True)
-    return {"family": fid, "n": len(members), "median_LCD_A": med("LCD"), "median_PLD_A": med("PLD"),
+    extra = {}
+    if w.mixed:
+        nz = int(sum(w.zeo[i] for i in members))
+        extra["material_class"] = "zeolite" if nz == len(members) else "MOF" if nz == 0 else f"mixed ({nz} zeolites)"
+        if nz:
+            extra["note"] = ("IZA pure-silica zeolites: no metals, no cations, no open metal sites; descriptors "
+                             "computed by SIEVE on CoRE's scale; fair to them only geometrically")
+    if ctx.disorder_check:
+        from sieve.agents.checks import disorder_info
+        flags = [disorder_info(w.names[i], lazy=False).get("disordered") for i in members]
+        known = [f for f in flags if f is not None]
+        if known:
+            extra["disordered_fraction"] = round(sum(known) / len(known), 2)
+    return {"family": fid, "n": len(members), **extra, "median_LCD_A": med("LCD"), "median_PLD_A": med("PLD"),
             "median_void": med("AV_VF"), "median_area_m2g": round(med("ASA_m2_g")),
             "open_metal_fraction": round(float(np.mean([w.oms[i] for i in members])), 2),
             "common_metals": [m for m, _ in sorted(metals.items(), key=lambda kv: -kv[1])[:5]],
@@ -72,9 +85,18 @@ def upside_promise(ctx: Ctx, fid: str, llm_promise: float) -> float:
 
 
 def ensure_families(ctx: Ctx) -> None:
+    """k-means families over the descriptors. In a mixed pool the material classes are split
+    first: MOFs into N_FAMILIES families f1.., zeolites into their own z1 (z1/z2 if >= 40)."""
     if not ctx.families:
-        groups = kmeans(ctx.world.X, list(range(len(ctx.world.names))), N_FAMILIES)
+        w = ctx.world
+        allidx = list(range(len(w.names)))
+        zeo = [i for i in allidx if w.mixed and w.zeo[i]]
+        mof = [i for i in allidx if not (w.mixed and w.zeo[i])]
+        groups = kmeans(w.X, mof, N_FAMILIES) if mof else []
         ctx.families = {f"f{i + 1}": g for i, g in enumerate(sorted(groups, key=len, reverse=True))}
+        if zeo:
+            zg = kmeans(w.X, zeo, 2) if len(zeo) >= 40 else [zeo]
+            ctx.families.update({f"z{i + 1}": g for i, g in enumerate(sorted(zg, key=len, reverse=True))})
         ctx.promise = {f: 0.5 for f in ctx.families}
 
 
@@ -192,7 +214,8 @@ async def scout(ctx: Ctx) -> None:
 
     plan, _ = await step(ctx, "scout", "split the pool into families and decide where to look",
                          "You lead a group of sub-scouts. The pool has been split into families by pore "
-                         "geometry. Choose which families (2-5) deserve a dedicated sub-scout now, favouring "
+                         "geometry (and by material class when zeolites are present: z-families). Choose which "
+                         "families (2-5) deserve a dedicated sub-scout now, favouring "
                          "families with strong results AND families nobody has measured yet.",
                          {"families": cards, "promise_so_far": ctx.promise, "background_reasoning": PRIORS,
                           "answer_schema": {"focus": ["family ids"], "headline": "<= 14 words: the bet"}},
@@ -211,8 +234,12 @@ async def scout(ctx: Ctx) -> None:
     await asyncio.gather(*(child(f) for f in plan["focus"]))
     top = sorted(ctx.promise.items(), key=lambda kv: -kv[1])[:2]
     ctx.scout_headline = f"{plan['_text']} — most promising: " + ", ".join(f"{f} ({p:.2f})" for f, p in top)
+    w = ctx.world
+    fams = {f: {"n": len(m), "promise": round(ctx.promise.get(f, 0.5), 2),
+                "class": ("zeolite" if w.mixed and all(w.zeo[i] for i in m) else "MOF")} for f, m in ctx.families.items()}
     ctx.st.event(ctx.run_id, "decision", {"text": f"scout merged {len(plan['focus'])} sub-scout reports; "
-                                                  + ", ".join(f"{f} {p:.2f}" for f, p in sorted(ctx.promise.items()))},
+                                                  + ", ".join(f"{f} {p:.2f}" for f, p in sorted(ctx.promise.items())),
+                                          "families": fams, "focus": plan["focus"]},
                  agent_id="scout")
 
 

@@ -44,14 +44,29 @@ def dossier(st: Store, run_id: str, s: str, pct: dict) -> dict:
     meas = [{"tier": t, "uptake": round(u, 3), "err": round(e, 3), "cpu_s": round(c or 0), "mode": m}
             for t, u, e, c, m in st.con.execute(
                 "SELECT tier, uptake_molkg, uptake_err, cpu_s, mode FROM evaluations WHERE run_id=? AND "
-                "structure=? AND tier>0 AND status='ok' ORDER BY finished_at", (run_id, s))]
+                "structure=? AND tier IN (1, 2) AND status='ok' ORDER BY finished_at", (run_id, s))]
     picks = [{"round": r, "tier": t, "why": w} for r, t, w in st.con.execute(
         "SELECT round_no, tier, reason FROM tasks WHERE run_id=? AND structure=? AND tier>0 ORDER BY created_at",
         (run_id, s))]
     vetoes = [json.loads(p)["reason"] for (p,) in st.con.execute(
         "SELECT payload_json FROM events WHERE run_id=? AND type='veto' AND json_extract(payload_json,'$.structure')=?",
         (run_id, s))]
-    return {"structure": s, "features": feats,
+    extra = {}
+    if s.startswith("IZA-"):
+        extra["material_class"] = "zeolite (IZA-SC, pure-silica SiO2: no cations, no metals; descriptors computed by SIEVE)"
+    from sieve.capture import brief, estimates as cap_est
+    from sieve.pool import resolved_name
+    cap = cap_est(st.con, run_id)
+    c = cap.get(s) or cap.get(resolved_name(s))
+    if c:
+        extra["capture_check"] = {**brief(c), "on": s if s in cap else resolved_name(s),
+                                  "definition": "APS = S(CO2/N2, 15:85, 1 bar) x dN (mixture CO2 - N(0.01 bar)), mol/kg"}
+    res = [{"tier": t, "uptake": round(u, 3), "err": round(e, 3)} for t, u, e in st.con.execute(
+        "SELECT tier, uptake_molkg, uptake_err FROM evaluations WHERE run_id=? AND structure=? AND tier IN (1, 2) "
+        "AND status='ok'", (run_id, resolved_name(s)))]
+    if res:
+        extra["disorder_resolved_measurements"] = res
+    return {"structure": s, **extra, "features": feats,
             "open_metal_sites": (core.get("Has_OMS") or "").lower().startswith("y"),
             "metals": (d.metals if d else []) or [m for m in (core.get("All_Metals") or "").split(",") if m],
             "elements": d.elements if d else [], "density_g_cm3": round(d.density, 3) if d else None,
@@ -62,7 +77,9 @@ def dossier(st: Store, run_id: str, s: str, pct: dict) -> dict:
 async def explain(db_path: str, run_id: str, top: int = 5) -> list[dict]:
     st = Store(db_path)
     est = estimates_from_evaluations(st.con, run_id)
-    ranked = sorted(est.values(), key=lambda e: e.uptake, reverse=True)[:top]
+    from sieve.pool import is_resolved
+    ranked = sorted((e for e in est.values() if not is_resolved(e.structure)), key=lambda e: e.uptake,
+                    reverse=True)[:top]
     pct = pool_percentiles()
     st.upsert_agent(run_id, "analyst", "analyst", model=llm.MODEL_LARGE)
     out = []
@@ -75,7 +92,9 @@ async def explain(db_path: str, run_id: str, top: int = 5) -> list[dict]:
             r = await llm.chat(st, run_id, "analyst", "analyst", llm.MODEL_LARGE,
                                "You are the analyst of SIEVE, an agent team that screens metal-organic frameworks "
                                "for CO2 uptake at 298 K and 1 bar with GCMC (UFF framework, TraPPE CO2, NO framework "
-                               "partial charges, so only van der Waals attraction counts). Explain one discovery to a "
+                               "partial charges, so only van der Waals attraction counts; IZA zeolites, when present, "
+                               "are pure silica without cations, compared on geometry only; capture_check, when "
+                               "present, is the flue-gas result the run ranked by). Explain one discovery to a "
                                "technical audience, grounded ONLY in the data given: what the structure is like, "
                                "which features plausibly drive its uptake (cite the numbers and percentiles), how sure "
                                "the team is (tier, error bars, confirmation), and caveats. Do not invent names, "

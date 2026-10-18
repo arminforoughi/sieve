@@ -285,9 +285,11 @@ class RunState:
 
 
 def estimates_from_evaluations(con: sqlite3.Connection, run_id: str) -> dict[str, StructureEstimate]:
+    """1-bar uptake estimates from tiers 1 and 2. Tier-3 capture checks (sieve/capture.py) measure
+    something else (APS) and are read by capture.estimates(); they still count in the ledger."""
     per: dict[str, dict[int, list[tuple[float, float]]]] = {}
     for r in con.execute("SELECT structure, tier, uptake_molkg, uptake_err FROM evaluations "
-                         "WHERE run_id=? AND tier>0 AND status='ok'", (run_id,)):
+                         "WHERE run_id=? AND tier IN (1, 2) AND status='ok'", (run_id,)):
         per.setdefault(r["structure"], {}).setdefault(r["tier"], []).append(
             (r["uptake_molkg"], r["uptake_err"]))
     out = {}
